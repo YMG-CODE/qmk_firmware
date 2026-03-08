@@ -34,6 +34,21 @@ enum ETE_keycodes {
 #define SCRL_DVI QK_KB_8
 #define SCRL_DVD QK_KB_9
 
+//#include "i2c_master.h"
+#include "timer.h"
+#include "print.h"
+#include "raw_hid.h"
+#include "ete_common.h"
+
+// ==== RAW HID function prototypes ====
+void send_layer_usb(uint8_t layer);
+void send_keyevent_usb(uint16_t keycode, bool pressed, uint8_t layer);
+
+
+#define SLAVE_ADDR         0x0B
+#define CMD_REG_DISPLAY    0x01  // CPM表示コマンド
+#define CMD_REG_LAYER      0x02  // レイヤーインジケーターコマンド
+
 
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     [0] = LAYOUT(
@@ -83,12 +98,12 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
   //|--------+--------+--------+--------+--------+--------+-------+----------.   ,-------+--------+--------+--------+--------+--------+--------+---------'
  )
 };
-// clang-format on
 
+layer_state_t layer_state_set_user(layer_state_t state) {
+    uint8_t layer = get_highest_layer(state);
 
 #ifdef POINTING_DEVICE_AUTO_MOUSE_ENABLE
-layer_state_t layer_state_set_user(layer_state_t state) {
-    switch(get_highest_layer(remove_auto_mouse_layer(state, true))) {
+    switch (get_highest_layer(remove_auto_mouse_layer(state, true))) {
         case 3:
             state = remove_auto_mouse_layer(state, false);
             set_auto_mouse_enable(false);
@@ -97,9 +112,24 @@ layer_state_t layer_state_set_user(layer_state_t state) {
             set_auto_mouse_enable(true);
             break;
     }
+#endif
+
+    // ★ レイヤー変更通知（I2C / USB 等）
+    ete_on_layer(layer);
+
     return state;
 }
-#endif
+
+//POINTING DEVICE Rightをカーソル移動、Leftをスクロール（Master Left）
+//report_mouse_t pointing_device_task_combined_user(report_mouse_t left_report, report_mouse_t right_report) {
+    //left_report.h = left_report.x/4;//除数でスクロールの速度を調整1-4
+    //left_report.v = left_report.y/4;//除数でスクロールの速度を調整1-4
+    //left_report.x = 0;
+    //left_report.y = 0;
+    //return pointing_device_combine_reports(left_report, right_report);
+//}
+
+
 
 bool encoder_update_user(uint8_t index, bool clockwise) {
     keypos_t key;
@@ -132,6 +162,7 @@ bool encoder_update_user(uint8_t index, bool clockwise) {
 return false; 
 }
 
+
 const matrix_row_t matrix_mask[MATRIX_ROWS] = {
     0b00001111, // row 0: cols 0,1,2,3
     0b00001111, // row 1: cols 0,1,2,3
@@ -150,3 +181,16 @@ const matrix_row_t matrix_mask[MATRIX_ROWS] = {
     0b11110000, // row14: cols 4,5,6,7
     0b11110000, // row15: cols 4,5,6,7
 };
+
+void matrix_init_user(void) {
+    ete_init();
+}
+
+bool process_record_user(uint16_t keycode, keyrecord_t *record) {
+    ete_on_key(keycode, record);
+    return true;
+}
+
+void matrix_scan_user(void) {
+    ete_tick();
+}

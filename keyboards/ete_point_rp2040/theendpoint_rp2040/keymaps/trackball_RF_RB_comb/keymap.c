@@ -150,7 +150,8 @@ const matrix_row_t matrix_mask[MATRIX_ROWS] = {
     0b11110000, // row14: cols 4,5,6,7
     0b11110000, // row15: cols 4,5,6,7
 };
-//POINTING DEVICE Rightをカーソル移動、Leftをスクロール（Master Left）
+
+//POINTING DEVICE Rightをカーソル移動、Leftをスクロール（Master Right）
 report_mouse_t pointing_device_task_combined_user(report_mouse_t left_report, report_mouse_t right_report) {
     left_report.h = left_report.x/4;//除数でスクロールの速度を調整1-4
     left_report.v = left_report.y/4;//除数でスクロールの速度を調整1-4

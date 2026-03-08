@@ -4,6 +4,8 @@
 #include QMK_KEYBOARD_H
 #include "quantum.h"
 #include <stdio.h>
+#include "ete_common.h"
+#include "pointing_device.h"
 
 enum ETE_keycodes {
     ETE_SAFE_RANGE = SAFE_RANGE,
@@ -21,6 +23,13 @@ enum ETE_keycodes {
     SCRL_MO, // Momentary scroll mode
     SCRL_DVI, // Increment scroll divider
     SCRL_DVD, // Decrement scroll divider
+
+    LR_SWAP = SAFE_RANGE,
+
+    SCRL_HOLD = SAFE_RANGE, // ① 押している間スクロール
+    SCRL_UP,                // ② 速度+
+    SCRL_DN,                // ② 速度-
+    SCRL_SAVE,              // ③ 保存
 };
 
 #define REC_RST QK_KB_0
@@ -33,6 +42,13 @@ enum ETE_keycodes {
 #define SCRL_MO QK_KB_7
 #define SCRL_DVI QK_KB_8
 #define SCRL_DVD QK_KB_9
+
+#define LR_SWAP QK_KB_10
+
+#define SCRL_HOLD QK_KB_11
+#define SCRL_UP QK_KB_12       
+#define SCRL_DN QK_KB_13            
+#define SCRL_SAVE QK_KB_14
 
 
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
@@ -101,6 +117,39 @@ layer_state_t layer_state_set_user(layer_state_t state) {
 }
 #endif
 
+
+report_mouse_t pointing_device_task_combined_user(
+    report_mouse_t left,
+    report_mouse_t right
+) {
+    bool swap = ete_get_swap_state();
+
+    if (!swap) {
+        // 通常
+        left.h = -(left.x / 2);
+        left.v =  (left.y / 2);
+        left.x = 0;
+        left.y = 0;
+        left.buttons = 0;
+
+        right.h = -right.h;
+    } else {
+        // 入れ替え
+        right.h = -(right.x / 2);
+        right.v =  (right.y / 2);
+        right.x = 0;
+        right.y = 0;
+        right.buttons = 0;
+
+        left.h = -left.h;
+    }
+
+    report_mouse_t merged =
+        pointing_device_combine_reports(left, right);
+
+    return ete_pointing_tune(merged);
+}
+
 bool encoder_update_user(uint8_t index, bool clockwise) {
     keypos_t key;
     if(index == 0){
@@ -150,3 +199,34 @@ const matrix_row_t matrix_mask[MATRIX_ROWS] = {
     0b11110000, // row14: cols 4,5,6,7
     0b11110000, // row15: cols 4,5,6,7
 };
+
+bool process_record_user(uint16_t keycode, keyrecord_t *record) {
+    ete_on_key(keycode, record);   // ← これ必須
+
+    switch (keycode) {
+        case LR_SWAP:
+            if (record->event.pressed) {
+                ete_toggle_lr();
+            }
+            return false;
+
+        case SCRL_HOLD:
+            // ★ 押下/解放の両方で呼ぶ
+            ete_set_scroll_hold(record->event.pressed);
+            return false;
+
+        case SCRL_UP:
+            if (record->event.pressed) ete_scroll_speed_inc();
+            return false;
+
+        case SCRL_DN:
+            if (record->event.pressed) ete_scroll_speed_dec();
+            return false;
+
+        case SCRL_SAVE:
+            if (record->event.pressed) ete_scroll_settings_save();
+            return false;
+    }
+
+    return true;
+}

@@ -1,9 +1,10 @@
-// Copyright 2023 YMGWorks (@YMGWorks)
+	// Copyright 2023 YMGWorks (@YMGWorks)
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include QMK_KEYBOARD_H
 #include "quantum.h"
 #include <stdio.h>
+
 
 enum ETE_keycodes {
     ETE_SAFE_RANGE = SAFE_RANGE,
@@ -33,6 +34,38 @@ enum ETE_keycodes {
 #define SCRL_MO QK_KB_7
 #define SCRL_DVI QK_KB_8
 #define SCRL_DVD QK_KB_9
+
+#include "i2c_master.h"
+#include "timer.h"
+#include "print.h"
+
+#include "raw_hid.h"
+
+// ==== RAW HID function prototypes ====
+void send_layer_usb(uint8_t layer);
+void send_keyevent_usb(uint16_t keycode, bool pressed, uint8_t layer);
+
+
+#define SLAVE_ADDR         0x0B
+#define CMD_REG_DISPLAY    0x01  // CPM表示コマンド
+#define CMD_REG_LAYER      0x02  // レイヤーインジケーターコマンド
+
+// ==== CPM計算用 ====
+static uint32_t keystroke_count = 0;
+static uint32_t window_count    = 0;
+static uint32_t window_start    = 0;
+static uint16_t current_cpm     = 0;
+
+// ==== I2C送信用 ====
+static uint32_t last_send = 0;
+
+// ==== レイヤー送信用 ====
+static uint8_t last_layer_sent = 255;  // 初期値＝未送信状態
+
+// ---- 関数プロトタイプ宣言 ----
+static void send_cpm_i2c(uint16_t cpm);
+static void send_layer_i2c(uint8_t layer);  // ← 先に宣言して暗黙宣言エラーを防ぐ
+
 
 
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
@@ -85,10 +118,23 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 };
 // clang-format on
 
-
-#ifdef POINTING_DEVICE_AUTO_MOUSE_ENABLE
 layer_state_t layer_state_set_user(layer_state_t state) {
-    switch(get_highest_layer(remove_auto_mouse_layer(state, true))) {
+    uint8_t active_layer = get_highest_layer(state);
+
+    // デバッグ用ログ
+    uprintf("Layer change detected: %d (last_layer_sent=%d)\n", active_layer, last_layer_sent);
+
+    if (active_layer != last_layer_sent) {
+        // I2C (Core2 メーター) へ通知
+        send_layer_i2c(active_layer);
+
+        // ★ USB (RawHID) へも通知
+        send_layer_usb(active_layer);
+
+        last_layer_sent = active_layer;
+    }
+
+    switch (get_highest_layer(remove_auto_mouse_layer(state, true))) {
         case 3:
             state = remove_auto_mouse_layer(state, false);
             set_auto_mouse_enable(false);
@@ -99,7 +145,6 @@ layer_state_t layer_state_set_user(layer_state_t state) {
     }
     return state;
 }
-#endif
 
 bool encoder_update_user(uint8_t index, bool clockwise) {
     keypos_t key;
@@ -150,3 +195,108 @@ const matrix_row_t matrix_mask[MATRIX_ROWS] = {
     0b11110000, // row14: cols 4,5,6,7
     0b11110000, // row15: cols 4,5,6,7
 };
+
+// ==== RAW HID 送信用 ====
+// パケットフォーマット:
+// data[0] = コマンド種別
+//   0x01 : キーイベント
+//     data[1] = 1:押下, 0:離上
+//     data[2] = keycode LSB
+//     data[3] = keycode MSB
+//     data[4] = active_layer
+//   0x02 : レイヤー変更
+//     data[1] = active_layer
+
+void send_layer_usb(uint8_t layer) {
+    uint8_t data[32] = {0};
+    data[0] = 0x02;
+    data[1] = layer;
+    raw_hid_send(data, sizeof(data));
+}
+void send_keyevent_usb(uint16_t keycode, bool pressed, uint8_t layer) {
+    uint8_t data[32] = {0};
+    data[0] = 0x01;
+    data[1] = pressed ? 1 : 0;
+    data[2] = keycode & 0xFF;
+    data[3] = (keycode >> 8) & 0xFF;
+    data[4] = layer;  // アクティブレイヤー
+    raw_hid_send(data, sizeof(data));
+}
+
+
+// ---- CPM計算 ----
+static void update_cpm(void) {
+    uint32_t now = timer_read();
+    if (timer_elapsed(window_start) >= 1000) {
+        current_cpm = (window_count * 60);
+        window_count = 0;
+        window_start = now;
+        uprintf("CPM updated: %d\n", current_cpm);
+    }
+}
+
+// ---- CPM送信 ----
+static void send_cpm_i2c(uint16_t cpm) {
+    uint8_t buffer[3];
+    buffer[0] = CMD_REG_DISPLAY;
+    buffer[1] = (cpm >> 8) & 0xFF;
+    buffer[2] = cpm & 0xFF;
+
+    i2c_status_t status = i2c_transmit(SLAVE_ADDR << 1, buffer, sizeof(buffer), 100);
+    if (status == I2C_STATUS_SUCCESS) {
+        uprintf("I2C OK: CPM=%d\n", cpm);
+    } else {
+        uprintf("I2C Error: status=%d\n", status);
+    }
+}
+
+// ---- レイヤー送信 ----
+static void send_layer_i2c(uint8_t layer) {
+    uint8_t buffer[2];
+    buffer[0] = CMD_REG_LAYER;
+    buffer[1] = layer;
+
+    i2c_status_t status = i2c_transmit(SLAVE_ADDR << 1, buffer, sizeof(buffer), 100);
+    if (status == I2C_STATUS_SUCCESS) {
+        uprintf("I2C OK: Layer=%d\n", layer);
+    } else {
+        uprintf("I2C Error(Layer): status=%d\n", status);
+    }
+}
+
+// ---- 初期化 ----
+void matrix_init_user(void) {
+    i2c_init();
+    wait_ms(100);
+    window_start = timer_read();
+    uprintf("QMK Typing Meter started. I2C addr=0x%02X\n", SLAVE_ADDR);
+}
+
+// ---- キー入力 ----
+bool process_record_user(uint16_t keycode, keyrecord_t *record) {
+    // ==== CPM 用カウント（既存処理）====
+    if (record->event.pressed) {
+        keystroke_count++;
+        window_count++;
+    }
+
+    // ==== RAW HID 経由で PC にキーイベント送信 ====
+    // 現在のアクティブレイヤーを取得
+    uint8_t active_layer = get_highest_layer(layer_state);
+
+    // 押下/離上どちらも通知
+    send_keyevent_usb(keycode, record->event.pressed, active_layer);
+
+    return true;
+}
+
+
+// ---- メインループ ----
+void matrix_scan_user(void) {
+    update_cpm();
+
+    if (timer_elapsed(last_send) > 500) {
+        send_cpm_i2c(current_cpm);
+        last_send = timer_read();
+    }
+}

@@ -5,6 +5,9 @@
 #include "quantum.h"
 #include <stdio.h>
 
+
+
+
 enum ETE_keycodes {
     ETE_SAFE_RANGE = SAFE_RANGE,
     REC_RST, // ETE configuration: reset to default
@@ -33,7 +36,6 @@ enum ETE_keycodes {
 #define SCRL_MO QK_KB_7
 #define SCRL_DVI QK_KB_8
 #define SCRL_DVD QK_KB_9
-
 
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     [0] = LAYOUT(
@@ -85,7 +87,6 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 };
 // clang-format on
 
-
 #ifdef POINTING_DEVICE_AUTO_MOUSE_ENABLE
 layer_state_t layer_state_set_user(layer_state_t state) {
     switch(get_highest_layer(remove_auto_mouse_layer(state, true))) {
@@ -100,37 +101,6 @@ layer_state_t layer_state_set_user(layer_state_t state) {
     return state;
 }
 #endif
-
-bool encoder_update_user(uint8_t index, bool clockwise) {
-    keypos_t key;
-    if(index == 0){
-     if(clockwise){
-         key.row = 4;
-         key.col = 0;
-       } else {
-         key.row = 4;
-         key.col = 1;
-       }
-      
-       uint8_t layer = layer_switch_get_layer(key);
-       uint8_t keycode = keymap_key_to_keycode(layer,key);
-       tap_code16(keycode);
-    
-    }else if(index == 1){
-      if(clockwise){
-         key.row = 12;
-         key.col = 0;
-       } else {
-         key.row = 12;
-         key.col = 1;
-       }
-      
-       uint8_t layer = layer_switch_get_layer(key);
-       uint8_t keycode = keymap_key_to_keycode(layer,key);
-       tap_code16(keycode);
-}
-return false; 
-}
 
 const matrix_row_t matrix_mask[MATRIX_ROWS] = {
     0b00001111, // row 0: cols 0,1,2,3

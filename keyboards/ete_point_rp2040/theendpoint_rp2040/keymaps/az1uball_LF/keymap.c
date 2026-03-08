@@ -83,8 +83,6 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
   //|--------+--------+--------+--------+--------+--------+-------+----------.   ,-------+--------+--------+--------+--------+--------+--------+---------'
  )
 };
-// clang-format on
-
 
 #ifdef POINTING_DEVICE_AUTO_MOUSE_ENABLE
 layer_state_t layer_state_set_user(layer_state_t state) {
@@ -100,6 +98,17 @@ layer_state_t layer_state_set_user(layer_state_t state) {
     return state;
 }
 #endif
+
+//POINTING DEVICE Rightをカーソル移動、Leftをスクロール（Master Left）
+report_mouse_t pointing_device_task_combined_user(report_mouse_t left_report, report_mouse_t right_report) {
+    left_report.h = left_report.x/4;//除数でスクロールの速度を調整1-4
+    left_report.v = left_report.y/4;//除数でスクロールの速度を調整1-4
+    left_report.x = 0;
+    left_report.y = 0;
+    return pointing_device_combine_reports(left_report, right_report);
+}
+
+
 
 bool encoder_update_user(uint8_t index, bool clockwise) {
     keypos_t key;
@@ -131,6 +140,7 @@ bool encoder_update_user(uint8_t index, bool clockwise) {
 }
 return false; 
 }
+
 
 const matrix_row_t matrix_mask[MATRIX_ROWS] = {
     0b00001111, // row 0: cols 0,1,2,3

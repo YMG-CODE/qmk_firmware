@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
+
 #define MASTER_LEFT
 
 //#define SPLIT_POINTING_ENABLE
@@ -18,3 +19,12 @@
 
 
 #define SPLIT_TRANSACTION_IDS_KB ETE_GET_INFO, ETE_GET_MOTION, ETE_SET_CPI
+
+#define I2C1_SDA_PIN GP6
+#define I2C1_SCL_PIN GP7
+#define I2C_DRIVER I2CD1
+
+#define PICO_XOSC_STARTUP_DELAY_MULTIPLIER 64
+
+#define RAW_USAGE_PAGE 0xFF60
+#define RAW_USAGE_ID   0x61

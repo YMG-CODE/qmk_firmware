@@ -6,7 +6,6 @@ POINTING_DEVICE_ENABLE = yes
 POINTING_DEVICE_SPLITS += yes
 
 
-
 # Include common library
 SRC += lib_combine/ETE/ETE.c
 SRC += drivers/pmw3360/pmw3360.c
