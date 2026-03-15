@@ -25,7 +25,11 @@ void ete_scroll_speed_dec(void);
 uint8_t ete_get_scroll_speed(void);
 
 // save/load (explicit save)
-void ete_scroll_settings_save(void);
+void ete_cursor_speed_inc(void);
+void ete_cursor_speed_dec(void);
+uint8_t ete_get_cursor_speed(void);
+
+void ete_settings_save(void);
 
 
 

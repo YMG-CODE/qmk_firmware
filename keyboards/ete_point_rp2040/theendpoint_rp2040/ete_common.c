@@ -32,10 +32,13 @@
 // scroll mode API
 bool ete_get_scroll_hold(void);
 uint8_t ete_get_scroll_speed(void);
+static uint8_t cursor_speed = 100;   // 100% = デフォルト
 
 #define ETE_EECONF_SWAPLR_MASK      0x00000001UL
 #define ETE_EECONF_SCROLLSPD_SHIFT  1
 #define ETE_EECONF_SCROLLSPD_MASK   0x000001FEUL  // bits 8..1
+#define ETE_EECONF_CURSORSPD_SHIFT 9
+#define ETE_EECONF_CURSORSPD_MASK  0x0003FE00UL
 
 
 // ================================
@@ -201,8 +204,6 @@ static inline bool ete_solq_pop(uint8_t *out_cmd) {
 
 void ete_init(void) {
 
-    eeconfig_update_kb(eeconfig_read_kb());  // 念のため初期化
-
     uint32_t val = eeconfig_read_kb();
     swap_lr = (val & 0x01);
 
@@ -212,6 +213,13 @@ void ete_init(void) {
     } else {
         scroll_speed = 100; // デフォルト
     }
+
+    uint32_t cs = (val & ETE_EECONF_CURSORSPD_MASK) >> ETE_EECONF_CURSORSPD_SHIFT;
+    if (cs >= 50 && cs <= 200) {
+    cursor_speed = (uint8_t)cs;
+    } else {
+     cursor_speed = 100;    
+    }         
 
     window_start32 = timer_read32();
     last_send32    = timer_read32();
@@ -356,6 +364,7 @@ report_mouse_t ete_pointing_tune(report_mouse_t report)
     static float scroll_accum_v = 0;
     static float scroll_accum_h = 0;
     static uint8_t scroll_release_guard = 0;
+    
 
  // ==============================
 // 精密トラックボール最終版
@@ -405,8 +414,10 @@ if (speed > 0 && speed < 5) {
 
 if (scale > 1.6f) scale = 1.6f;
 
-float target_x = vx * scale;
-float target_y = vy * scale;
+
+float cursor_scale = (float)cursor_speed / 100.0f;
+float target_x = vx * scale * cursor_scale;
+float target_y = vy * scale * cursor_scale;
 
 // ===== 速度依存スムージング（重要） =====
 float alpha;
@@ -515,14 +526,14 @@ report.y = (int)smooth_y;
     scroll_accum_v -= final_v;
     scroll_accum_h -= final_h;
 
-    report.v = final_v;
-    report.h = final_h;
-    return report;
-
     //スクロールが出ているフレームではクリックを無効化。   
     if (report.v != 0 || report.h != 0) {
     report.buttons = 0;
     }
+
+    report.v = final_v;
+    report.h = final_h;
+    return report;
 }
 
 
@@ -583,6 +594,50 @@ void ete_scroll_settings_save(void) {
     // swap_lr(bit0)は保持、scroll_speed(bits8..1)だけ上書き
     val &= ~ETE_EECONF_SCROLLSPD_MASK;
     val |= ((uint32_t)scroll_speed << ETE_EECONF_SCROLLSPD_SHIFT) & ETE_EECONF_SCROLLSPD_MASK;
+
+    eeconfig_update_kb(val);
+}
+
+void ete_cursor_speed_inc(void) {
+    if (!is_keyboard_master()) return;
+    if (cursor_speed < 200) cursor_speed += 5;
+}
+
+void ete_cursor_speed_dec(void) {
+    if (!is_keyboard_master()) return;
+    if (cursor_speed > 50) cursor_speed -= 5;
+}
+
+uint8_t ete_get_cursor_speed(void) {
+    return cursor_speed;
+}
+
+void ete_cursor_settings_save(void) {
+    uint32_t val = eeconfig_read_kb();
+
+    val &= ~ETE_EECONF_CURSORSPD_MASK;
+    val |= ((uint32_t)cursor_speed << ETE_EECONF_CURSORSPD_SHIFT)
+           & ETE_EECONF_CURSORSPD_MASK;
+
+    eeconfig_update_kb(val);
+}
+
+void ete_settings_save(void) {
+    if (!is_keyboard_master()) return;
+
+    uint32_t val = eeconfig_read_kb();
+
+    // scroll speed
+    val &= ~ETE_EECONF_SCROLLSPD_MASK;
+    val |= ((uint32_t)scroll_speed << ETE_EECONF_SCROLLSPD_SHIFT)
+           & ETE_EECONF_SCROLLSPD_MASK;
+
+    // cursor speed
+    val &= ~ETE_EECONF_CURSORSPD_MASK;
+    val |= ((uint32_t)cursor_speed << ETE_EECONF_CURSORSPD_SHIFT)
+           & ETE_EECONF_CURSORSPD_MASK;
+    
+    uprintf("SAVE scroll=%d cursor=%d\n", scroll_speed, cursor_speed);
 
     eeconfig_update_kb(val);
 }
