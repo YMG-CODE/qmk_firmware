@@ -30,8 +30,6 @@ enum ETE_keycodes {
     SCRL_UP,                // ② 速度+
     SCRL_DN,                // ② 速度-
     SCRL_SAVE,              // ③ 保存
-    CURSOR_UP,
-    CURSOR_DN,
 };
 
 #define REC_RST QK_KB_0
@@ -46,13 +44,27 @@ enum ETE_keycodes {
 #define SCRL_DVD QK_KB_9
 
 #define LR_SWAP QK_KB_10
+
 #define SCRL_HOLD QK_KB_11
 #define SCRL_UP QK_KB_12       
 #define SCRL_DN QK_KB_13            
 #define SCRL_SAVE QK_KB_14
-#define CURSOR_UP QK_KB_15
-#define CURSOR_DN QK_KB_16
 
+
+//#include "i2c_master.h"
+#include "timer.h"
+#include "print.h"
+#include "raw_hid.h"
+#include "ete_common.h"
+
+// ==== RAW HID function prototypes ====
+void send_layer_usb(uint8_t layer);
+void send_keyevent_usb(uint16_t keycode, bool pressed, uint8_t layer);
+
+
+#define SLAVE_ADDR         0x0B
+#define CMD_REG_DISPLAY    0x01  // CPM表示コマンド
+#define CMD_REG_LAYER      0x02  // レイヤーインジケーターコマンド
 
 
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
@@ -105,9 +117,9 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 };
 // clang-format on
 
+layer_state_t layer_state_set_user(layer_state_t state) {
 
 #ifdef POINTING_DEVICE_AUTO_MOUSE_ENABLE
-layer_state_t layer_state_set_user(layer_state_t state) {
     switch(get_highest_layer(remove_auto_mouse_layer(state, true))) {
         case 3:
             state = remove_auto_mouse_layer(state, false);
@@ -117,9 +129,14 @@ layer_state_t layer_state_set_user(layer_state_t state) {
             set_auto_mouse_enable(true);
             break;
     }
+#endif
+
+    uint8_t layer = get_highest_layer(state);
+
+    ete_on_layer(layer);
+
     return state;
 }
-#endif
 
 
 report_mouse_t pointing_device_task_combined_user(
@@ -214,12 +231,6 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
             }
             return false;
 
-        case SCRL_SAVE:
-            if (record->event.pressed) {
-                ete_settings_save();
-            }
-            return false;
-
         case SCRL_HOLD:
             // ★ 押下/解放の両方で呼ぶ
             ete_set_scroll_hold(record->event.pressed);
@@ -233,16 +244,18 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
             if (record->event.pressed) ete_scroll_speed_dec();
             return false;
 
-
-        case CURSOR_UP:
-            if (record->event.pressed) ete_cursor_speed_inc();
+        case SCRL_SAVE:
+            if (record->event.pressed) ete_scroll_settings_save();
             return false;
-
-        case CURSOR_DN:
-            if (record->event.pressed) ete_cursor_speed_dec();
-            return false;
-            
     }
 
     return true;
+}
+
+void matrix_init_user(void) {
+    ete_init();
+}
+
+void matrix_scan_user(void) {
+    ete_tick();
 }

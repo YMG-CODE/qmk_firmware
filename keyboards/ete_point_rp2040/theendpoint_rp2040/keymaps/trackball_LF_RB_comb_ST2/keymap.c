@@ -4,8 +4,6 @@
 #include QMK_KEYBOARD_H
 #include "quantum.h"
 #include <stdio.h>
-#include "ete_common.h"
-#include "pointing_device.h"
 
 enum ETE_keycodes {
     ETE_SAFE_RANGE = SAFE_RANGE,
@@ -23,15 +21,6 @@ enum ETE_keycodes {
     SCRL_MO, // Momentary scroll mode
     SCRL_DVI, // Increment scroll divider
     SCRL_DVD, // Decrement scroll divider
-
-    LR_SWAP = SAFE_RANGE,
-
-    SCRL_HOLD = SAFE_RANGE, // ① 押している間スクロール
-    SCRL_UP,                // ② 速度+
-    SCRL_DN,                // ② 速度-
-    SCRL_SAVE,              // ③ 保存
-    CURSOR_UP,
-    CURSOR_DN,
 };
 
 #define REC_RST QK_KB_0
@@ -45,13 +34,37 @@ enum ETE_keycodes {
 #define SCRL_DVI QK_KB_8
 #define SCRL_DVD QK_KB_9
 
-#define LR_SWAP QK_KB_10
-#define SCRL_HOLD QK_KB_11
-#define SCRL_UP QK_KB_12       
-#define SCRL_DN QK_KB_13            
-#define SCRL_SAVE QK_KB_14
-#define CURSOR_UP QK_KB_15
-#define CURSOR_DN QK_KB_16
+//#include "i2c_master.h"
+#include "timer.h"
+#include "print.h"
+#include "raw_hid.h"
+#include "ete_common.h"
+
+// ==== RAW HID function prototypes ====
+void send_layer_usb(uint8_t layer);
+void send_keyevent_usb(uint16_t keycode, bool pressed, uint8_t layer);
+
+
+#define SLAVE_ADDR         0x0B
+#define CMD_REG_DISPLAY    0x01  // CPM表示コマンド
+#define CMD_REG_LAYER      0x02  // レイヤーインジケーターコマンド
+
+
+enum custom_keycodes {
+    SCROLL = SAFE_RANGE,
+};
+
+bool set_scrolling = false;
+
+#define SCROLL_DIVISOR_H 32.0
+#define SCROLL_DIVISOR_V 32.0
+
+float scroll_accumulated_h = 0;
+float scroll_accumulated_v = 0;
+
+
+
+
 
 
 
@@ -106,9 +119,11 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 // clang-format on
 
 
-#ifdef POINTING_DEVICE_AUTO_MOUSE_ENABLE
 layer_state_t layer_state_set_user(layer_state_t state) {
-    switch(get_highest_layer(remove_auto_mouse_layer(state, true))) {
+    uint8_t layer = get_highest_layer(state);
+
+#ifdef POINTING_DEVICE_AUTO_MOUSE_ENABLE
+    switch (get_highest_layer(remove_auto_mouse_layer(state, true))) {
         case 3:
             state = remove_auto_mouse_layer(state, false);
             set_auto_mouse_enable(false);
@@ -117,41 +132,12 @@ layer_state_t layer_state_set_user(layer_state_t state) {
             set_auto_mouse_enable(true);
             break;
     }
-    return state;
-}
 #endif
 
+    // ★ レイヤー変更通知（I2C / USB 等）
+    ete_on_layer(layer);
 
-report_mouse_t pointing_device_task_combined_user(
-    report_mouse_t left,
-    report_mouse_t right
-) {
-    bool swap = ete_get_swap_state();
-
-    if (!swap) {
-        // 通常
-        left.h = -(left.x / 2);
-        left.v =  (left.y / 2);
-        left.x = 0;
-        left.y = 0;
-        left.buttons = 0;
-
-        right.h = -right.h;
-    } else {
-        // 入れ替え
-        right.h = -(right.x / 2);
-        right.v =  (right.y / 2);
-        right.x = 0;
-        right.y = 0;
-        right.buttons = 0;
-
-        left.h = -left.h;
-    }
-
-    report_mouse_t merged =
-        pointing_device_combine_reports(left, right);
-
-    return ete_pointing_tune(merged);
+    return state;
 }
 
 bool encoder_update_user(uint8_t index, bool clockwise) {
@@ -185,6 +171,17 @@ bool encoder_update_user(uint8_t index, bool clockwise) {
 return false; 
 }
 
+void keyboard_post_init_user(void) {
+#if POINTING_DEVICE_DEBUG
+    debug_enable=true;
+#endif
+    // debug_matrix=true;
+    // debug_keyboard=true;
+    // debug_mouse=true;
+    rgblight_sethsv(HSV_BLUE);
+}
+
+
 const matrix_row_t matrix_mask[MATRIX_ROWS] = {
     0b00001111, // row 0: cols 0,1,2,3
     0b00001111, // row 1: cols 0,1,2,3
@@ -204,45 +201,38 @@ const matrix_row_t matrix_mask[MATRIX_ROWS] = {
     0b11110000, // row15: cols 4,5,6,7
 };
 
+void matrix_init_user(void) {
+    ete_init();
+}
+
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
-    ete_on_key(keycode, record);   // ← これ必須
 
+    // --- ① 既存のスクロール制御 ---
     switch (keycode) {
-        case LR_SWAP:
-            if (record->event.pressed) {
-                ete_toggle_lr();
-            }
-            return false;
-
-        case SCRL_SAVE:
-            if (record->event.pressed) {
-                ete_settings_save();
-            }
-            return false;
-
-        case SCRL_HOLD:
-            // ★ 押下/解放の両方で呼ぶ
-            ete_set_scroll_hold(record->event.pressed);
-            return false;
-
-        case SCRL_UP:
-            if (record->event.pressed) ete_scroll_speed_inc();
-            return false;
-
-        case SCRL_DN:
-            if (record->event.pressed) ete_scroll_speed_dec();
-            return false;
-
-
-        case CURSOR_UP:
-            if (record->event.pressed) ete_cursor_speed_inc();
-            return false;
-
-        case CURSOR_DN:
-            if (record->event.pressed) ete_cursor_speed_dec();
-            return false;
-            
+        case SCROLL:
+            set_scrolling = record->event.pressed;
+            break;
+        default:
+            break;
     }
 
+    // --- ② ETE 側のキー通知 ---
+    ete_on_key(keycode, record);
+
+    // --- ③ QMK の通常処理は止めない ---
     return true;
+}
+
+
+void matrix_scan_user(void) {
+    ete_tick();
+}
+
+//POINTING DEVICE Rightをカーソル移動、Leftをスクロール（Master Left）
+report_mouse_t pointing_device_task_combined_user(report_mouse_t left_report, report_mouse_t right_report) {
+    left_report.h = left_report.x;
+    left_report.v = left_report.y;
+    left_report.x = 0;
+    left_report.y = 0;
+    return pointing_device_combine_reports(left_report, right_report);
 }
