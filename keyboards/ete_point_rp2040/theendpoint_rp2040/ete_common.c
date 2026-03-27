@@ -14,6 +14,7 @@
 
 #include "ete_common.h"
 #include "timer.h"
+#include "lib_combine/ETE/ETE.h"
 
 #ifdef ETE_ENABLE_RAW
 #    include "raw_hid.h"
@@ -29,17 +30,12 @@
 
 #include "eeconfig.h"
 
+
+
 // scroll mode API
 bool ete_get_scroll_hold(void);
 uint8_t ete_get_scroll_speed(void);
-static uint8_t cursor_speed = 100;   // 100% = デフォルト
-
-#define ETE_EECONF_SWAPLR_MASK      0x00000001UL
-#define ETE_EECONF_SCROLLSPD_SHIFT  1
-#define ETE_EECONF_SCROLLSPD_MASK   0x000001FEUL  // bits 8..1
-#define ETE_EECONF_CURSORSPD_SHIFT 9
-#define ETE_EECONF_CURSORSPD_MASK  0x0003FE00UL
-
+static uint8_t cursor_speed = 80;   // 100% = デフォルト
 
 // ================================
 // 設定
@@ -88,6 +84,7 @@ static uint8_t cursor_speed = 100;   // 100% = デフォルト
 // ================================
 // 内部状態
 // ================================
+
 static uint32_t window_start32 = 0;
 static uint32_t window_count32 = 0;
 static uint16_t current_cpm16  = 0;
@@ -98,7 +95,13 @@ static uint8_t  last_layer8    = 0xFF;
 static bool swap_lr = false;
 
 static bool scroll_hold = false;     // ① 押している間だけON
-static uint8_t scroll_speed = 100;   // ② 速度(%) 100=等倍
+static uint8_t scroll_speed = 80;   // ② 速度(%) 100=等倍
+
+static uint8_t touch_guard = 0;//指を置いた瞬間の誤爆防止
+
+static uint8_t inertia_strength = 80; // 0〜100（デフォルト80）
+
+static bool inertia_enabled = true;
 
 // ソレノイド送信キュー
 #ifdef ETE_ENABLE_SOLENOID
@@ -198,28 +201,77 @@ static inline bool ete_solq_pop(uint8_t *out_cmd) {
 }
 #endif
 
+void ete_config_init(void) {
+    uint32_t raw = 0;
+
+    raw = ete_conf_set_scroll_speed(raw, 80);
+    raw = ete_conf_set_cursor_speed(raw, 80);
+    raw = ete_conf_set_inertia(raw, 80);
+    raw = ete_conf_set_swap_lr(raw, false);
+
+    eeconfig_update_kb(raw);
+
+    uprintf("[INIT DEFAULT] raw=0x%08lX\n", (unsigned long)raw);
+}
+
+
 // ================================
 // 公開API
 // ================================
 
 void ete_init(void) {
-
-    uint32_t val = eeconfig_read_kb();
-    swap_lr = (val & 0x01);
-
-    uint32_t spd = (val & ETE_EECONF_SCROLLSPD_MASK) >> ETE_EECONF_SCROLLSPD_SHIFT;
-    if (spd >= 30 && spd <= 200) {
-        scroll_speed = (uint8_t)spd;
-    } else {
-        scroll_speed = 100; // デフォルト
+    if (!eeconfig_is_enabled()) {
+        eeconfig_init();
+        ete_config_init();
     }
 
-    uint32_t cs = (val & ETE_EECONF_CURSORSPD_MASK) >> ETE_EECONF_CURSORSPD_SHIFT;
-    if (cs >= 50 && cs <= 200) {
-    cursor_speed = (uint8_t)cs;
+    uint32_t raw = eeconfig_read_kb();
+    bool need_save = false;
+
+    // --- swap ---
+    swap_lr = ete_conf_get_swap_lr(raw);
+
+    // --- scroll ---
+    uint8_t spd = ete_conf_get_scroll_speed(raw);
+    if (spd >= 30 && spd <= 127) {
+        scroll_speed = spd;
     } else {
-     cursor_speed = 100;    
-    }         
+        scroll_speed = 80;
+        raw = ete_conf_set_scroll_speed(raw, scroll_speed);
+        need_save = true;
+    }
+
+    // --- cursor ---
+    uint8_t cs = ete_conf_get_cursor_speed(raw);
+    if (cs >= 30 && cs <= 127) {
+        cursor_speed = cs;
+    } else {
+        cursor_speed = 80;
+        raw = ete_conf_set_cursor_speed(raw, cursor_speed);
+        need_save = true;
+    }
+
+    // --- inertia ---
+    uint8_t in = ete_conf_get_inertia(raw);
+
+    uprintf("[INERTIA LOAD] raw=0x%08lX mask=0x%08lX val=%u\n",
+        (unsigned long)raw,
+        (unsigned long)(raw & ETE_CONF_INERTIA_MASK),
+        in);
+
+    if (in <= 127 && in > 0) {
+        inertia_strength = in;
+    } else {
+        inertia_strength = 80;
+        raw = ete_conf_set_inertia(raw, inertia_strength);
+        need_save = true;
+    }
+
+    // --- 必要なら修復保存 ---
+    if (need_save) {
+        eeconfig_update_kb(raw);
+        uprintf("[EEPROM FIXED] raw=0x%08lX\n", (unsigned long)raw);
+    }
 
     window_start32 = timer_read32();
     last_send32    = timer_read32();
@@ -234,17 +286,17 @@ void ete_init(void) {
 #ifdef ETE_ENABLE_I2C
     i2c_init();
     wait_ms(10);
-
-    // ※ I2C速度アップ（環境依存なので“あれば”使う）
-    // QMKの環境によって関数/マクロが違うので、ここはコンパイル安全にしている
-    // もしあなたの環境に i2c_set_speed があるなら有効化してOK
-    // i2c_set_speed(I2C_SPEED_FAST); // 400kHz
 #endif
 
-    // 起動直後に「現在レイヤー」を一度送っておく（Core2の初期表示安定）
     ete_on_layer(ete_get_active_layer());
 
-    uprintf("[ETE] init done.\n");
+uprintf("[ETE] init raw=0x%08lX swap=%u scroll=%u cursor=%u inertia=%u master=%u\n",
+    (unsigned long)raw,
+    swap_lr,
+    scroll_speed,
+    cursor_speed,
+    inertia_strength,
+    is_keyboard_master());
 }
 
 void ete_solenoid_light(void) {
@@ -370,8 +422,6 @@ report_mouse_t ete_pointing_tune(report_mouse_t report)
 // 精密トラックボール最終版
 // ==============================
 
-static float smooth_x = 0;
-static float smooth_y = 0;
 
 int vx = report.x;
 int vy = report.y;
@@ -381,20 +431,14 @@ float dead = 2.0f;
 
 // ===== ① HOLDスクロールモード：XYをVHへ変換 =====
 if (ete_get_scroll_hold()) {
-    // 2点タッチ等で report.v/h が既に入ってる場合があるので「加算」にするのが安全
-    report.h += vx;
-    report.v += vy;
+    report.h = vx;
+    report.v = vy;
 
-    // カーソルは完全停止
     report.x = 0;
     report.y = 0;
+    report.buttons = 0;   // 追加
 
-    // ★クリック無効
-    report.buttons = 0;
-
-    // ★ ローカルも止める（これが重要）
-    vx = 0;
-    vy = 0;
+    return report;
 }
 
 // なだらかデッドゾーン
@@ -403,52 +447,93 @@ if (fabs(vy) < dead) vy = 0;
 
 int speed = abs(vx) + abs(vy);
 
-// 連続カーブ
-float s = speed / 32.0f;
-float scale = 0.18f + (s * s * 0.75f);
-
-// 微小速度ブースト（scaleを先に補正する）
-if (speed > 0 && speed < 5) {
-    scale += 0.05f * (5 - speed);
-}
-
-if (scale > 1.6f) scale = 1.6f;
+// ===== velocityモデル =====
+static float vel_x = 0;
+static float vel_y = 0;
 
 
-float cursor_scale = (float)cursor_speed / 100.0f;
-float target_x = vx * scale * cursor_scale;
-float target_y = vy * scale * cursor_scale;
+float cursor_scale = (float)cursor_speed / 127.0f;
 
-// ===== 速度依存スムージング（重要） =====
-float alpha;
+// 入力
+float input_x = vx * cursor_scale;
+float input_y = vy * cursor_scale;
 
-if (speed < 3) {
-    alpha = 0.85f;   // ★ 超精密域：ほぼダイレクト
-}
-else if (speed < 8) {
-    alpha = 0.60f;   // 精密操作域
-}
-else if (speed < 18) {
-    alpha = 0.40f;   // 中速
+
+// ===== 入力中 =====
+if (speed > 0) {
+    float inertia = inertia_enabled
+    ? (float)inertia_strength / 100.0f
+    : 0.0f;
+
+    inertia = inertia * 1.4f;
+
+
+    // ★低速時は慣性を弱める
+    if (speed < 3) {
+        inertia *= 0.3f;
+    }
+    else if (speed < 8) {
+        inertia *= 0.6f;
+    }
+    float accel;
+
+    if (speed < 3) {
+        accel = 0.08f;   // ←初速
+    }
+    else if (speed < 10) {
+        accel = 0.25f;
+    }
+    else {
+        accel = 0.35f;
+    }
+
+    // ★ inertiaで伸びる
+    accel += inertia * 0.15f;
+
+    vel_x = vel_x * (1.0f - accel) + input_x * accel;
+    vel_y = vel_y * (1.0f - accel) + input_y * accel;
 }
 else {
-    alpha = 0.25f;   // 高速
+    // ★ 速度ベース慣性
+    float speed_f = sqrtf(vx*vx + vy*vy);
+
+    float inertia = inertia_enabled
+        ? (float)inertia_strength / 100.0f
+        : 0.0f;
+
+    inertia = inertia * 1.5f;
+
+    float dynamic_decay;
+
+    if (speed_f < 3) {
+        dynamic_decay = 0.75f + inertia * 0.1f;
+    }
+    else if (speed_f < 10) {
+        dynamic_decay = 0.85f + inertia * 0.15f;
+    }
+    else {
+        dynamic_decay = 0.92f + inertia * 0.10f;
+    }
+    
+    if (!inertia_enabled) {
+    vel_x = input_x;
+    vel_y = input_y;
+    }
+    
+    // 微振動キラー
+    if (speed < 2 && fabs(vel_x) < 0.3f) vel_x = 0;
+    if (speed < 2 && fabs(vel_y) < 0.3f) vel_y = 0;
+
+    vel_x *= dynamic_decay;
+    vel_y *= dynamic_decay;
+
+    if (fabs(vel_x) < 0.05f) vel_x = 0;
+    if (fabs(vel_y) < 0.05f) vel_y = 0;
 }
 
-smooth_x = smooth_x * (1.0f - alpha) + target_x * alpha;
-smooth_y = smooth_y * (1.0f - alpha) + target_y * alpha;
-
-// ===== ソフト停止（最後にやる） =====
-if (speed == 0) {
-    smooth_x *= 0.85f;
-    smooth_y *= 0.85f;
-
-    if (fabs(smooth_x) < 0.25f) smooth_x = 0;
-    if (fabs(smooth_y) < 0.25f) smooth_y = 0;
-}
-
-report.x = (int)smooth_x;
-report.y = (int)smooth_y;
+// 出力
+report.x = (int)vel_x;
+report.y = (int)vel_y;
 
     // ==============================
     // ヌルヌル型 精密スクロール
@@ -471,71 +556,194 @@ report.y = (int)smooth_y;
     int sv = report.v;
     int sh = report.h;
 
-    if (abs(sv) < 2) sv = 0;
-    if (abs(sh) < 2) sh = 0;
+    // ==============================
+    // ソフトデッドゾーン（神設定）
+    // ==============================
+    float deads = 0;
+    
+    float fsv = (float)sv;
+    float fsh = (float)sh;
+
+    // Y
+    if (fabs(fsv) < deads) {
+        fsv = fsv * 0.8f;   // ←完全に殺さない
+    } else {
+        fsv = (fsv > 0) ? (fsv - deads) : (fsv + deads);
+    }
+
+    // X
+    if (fabs(fsh) < deads) {
+        fsh = fsh * 0.8f;
+    } else {
+        fsh = (fsh > 0) ? (fsh - deads) : (fsh + deads);
+    }
+
+    // ★超低速ブースト（ここがキモ）
+    if (fabs(fsv) > 0 && fabs(fsv) < 1.5f) {
+        fsv *= 1.8f;
+    }
+    if (fabs(fsh) > 0 && fabs(fsh) < 1.5f) {
+        fsh *= 1.8f;
+    }
+
+    // 戻す
+    sv = (int)fsv;
+    sh = (int)fsh;
 
     int scroll_speed = abs(sv) + abs(sh);
 
+
     // ==============================
-    // 連続ヌルヌルカーブ
+    // 超なめらか連続カーブ（初動改善版）
     // ==============================
 
-    float scroll_scale;
+    float s = (float)scroll_speed;
 
-    // 低速：超精密
-    if (scroll_speed < 6) {
-        scroll_scale = 0.025f;
-    }
-    // 中速：一番気持ちいいゾーン
-    else if (scroll_speed < 18) {
-        float t = (scroll_speed - 6) / 12.0f;
-        scroll_scale = 0.025f + t * 0.22f;
-    }
-    // 高速：伸びるが暴れない
-    else {
-        float t = (scroll_speed - 18) / 40.0f;
-        scroll_scale = 0.22f + (t * 0.25f);
-    }
+    // 0〜40くらいを想定して正規化
+    float t = s / 40.0f;
+    if (t > 1.0f) t = 1.0f;
 
+    // ease-outカーブ（初動を極小に）
+    float eased = t * t * t;  // ←ここ重要（指数2乗）
+
+    // スケール生成
+    float scroll_scale = 0.004f + eased * 0.35f;
+
+    // 上限
     if (scroll_scale > 0.7f) scroll_scale = 0.7f;
 
     float out_sv = sv * scroll_scale;
     float out_sh = sh * scroll_scale;
 
+    // スクロール速度反映（先にやる！）
     float sp = (float)ete_get_scroll_speed() / 100.0f;
     out_sv *= sp;
     out_sh *= sp;
 
+
+    static float scroll_vel_v = 0;
+    static float scroll_vel_h = 0;
+
+   float inertia = inertia_enabled
+    ? (float)inertia_strength / 100.0f
+    : 0.0f;
+    inertia = inertia * 1.2f;
+
+    if (!inertia_enabled) {
+    scroll_vel_v = out_sv;
+    scroll_vel_h = out_sh;
+}
+
+    // 減衰係数（スクロール用）
+    float decay;
+
+    float vel_power = fabs(scroll_vel_v) + fabs(scroll_vel_h);
+
+    if (vel_power < 0.5f) {
+    decay = 0.65f + inertia * 0.10f;
+    }
+    else if (vel_power < 3.0f) {
+        decay = 0.90f + inertia * 0.07f;
+    }
+    else {
+        decay = 0.97f + inertia * 0.03f;
+    }
+
+    //符号ブレ防止
+    // ★入力がある場合
+    if (fabs(out_sv) > 0 || fabs(out_sh) > 0) {
+        float accel;
+
+        if (vel_power < 0.5f) {
+            accel = 0.18f;                  // ← 初動ブースト
+            accel += inertia * 0.05f;       // ← 慣性弱め
+        }
+        else if (vel_power < 2.0f) {
+            accel = 0.35f;
+            accel += inertia * 0.25f;
+        }
+        else {
+            accel = 0.6f;
+            accel += inertia * 0.2f;
+        }
+
+        scroll_vel_v = scroll_vel_v * (1.0f - accel) + out_sv * accel;
+        scroll_vel_h = scroll_vel_h * (1.0f - accel) + out_sh * accel;
+    }
+    else {
+        // ★入力なし → 慣性だけ
+        scroll_vel_v *= decay;
+        scroll_vel_h *= decay;
+    }
+
+
+    // 停止処理
+    if (fabs(scroll_vel_v) < 0.2f) scroll_vel_v = 0;
+    if (fabs(scroll_vel_h) < 0.2f) scroll_vel_h = 0;
+
+    // ★最大速度制限・フレームレート調整
+    if (scroll_vel_v > 2.5f) scroll_vel_v = 2.5f;
+    if (scroll_vel_v < -2.5f) scroll_vel_v = -2.5f;
+
+    if (scroll_vel_h > 2.5f) scroll_vel_h = 2.5f;
+    if (scroll_vel_h < -2.5f) scroll_vel_h = -2.5f;
+
+    // 出力
+    static float scroll_rem_v = 0;
+    static float scroll_rem_h = 0;
+
+    scroll_rem_v += scroll_vel_v;
+    scroll_rem_h += scroll_vel_h;
+
+    int out_v = (int)scroll_rem_v;
+    int out_h = (int)scroll_rem_h;
+
+    scroll_rem_v -= out_v;
+    scroll_rem_h -= out_h;
+
+    report.v = out_v;
+    report.h = out_h;
+    
+    // ★ここ追加！！！！
+    if (report.buttons &&
+        (fabs(scroll_vel_v) > 0.1f || fabs(scroll_vel_h) > 0.1f)) {
+
+        scroll_vel_v = 0;
+        scroll_vel_h = 0;
+        scroll_rem_v = 0;
+        scroll_rem_h = 0;
+    }
+
+
     // ==============================
     // 中速域に気持ちよさを作る
     // ==============================
-    if (scroll_speed > 6 && scroll_speed < 18) {
-        out_sv *= 1.2f;
-        out_sh *= 1.2f;
+
+        if (ete_get_scroll_hold()) {
+        report.buttons = 0;
     }
 
-    // ==============================
-    // サブノッチ蓄積
-    // ==============================
-    scroll_accum_v += out_sv;
-    scroll_accum_h += out_sh;
+    //低速操作時のクリック誤検知防止
+    int move_mag = abs(report.x) + abs(report.y);
 
-    int final_v = (int)scroll_accum_v;
-    int final_h = (int)scroll_accum_h;
-
-    scroll_accum_v -= final_v;
-    scroll_accum_h -= final_h;
-
-    //スクロールが出ているフレームではクリックを無効化。   
-    if (report.v != 0 || report.h != 0) {
-    report.buttons = 0;
+    // ★ 低速時クリック禁止
+    if (move_mag > 0 && move_mag < 3) {//3～4で調整
+        report.buttons = 0;
     }
 
-    report.v = final_v;
-    report.h = final_h;
+    //指を置いた瞬間の誤検知防止
+    if (speed > 0) {
+        touch_guard = 3;  // 数フレームガード
+    }
+
+    if (touch_guard > 0) {
+        report.buttons = 0;
+        touch_guard--;
+    }
+
+    
     return report;
 }
-
 
 
 report_mouse_t pointing_device_task_user(report_mouse_t report)
@@ -547,18 +755,6 @@ report_mouse_t pointing_device_task_user(report_mouse_t report)
 
 bool ete_get_swap_state(void) {
     return swap_lr;
-}
-
-void ete_toggle_lr(void) {
-    swap_lr = !swap_lr;
-
-    uint32_t val = eeconfig_read_kb();
-    if (swap_lr) {
-        val |= 0x01;
-    } else {
-        val &= ~0x01;
-    }
-    eeconfig_update_kb(val);
 }
 
 
@@ -577,67 +773,116 @@ uint8_t ete_get_scroll_speed(void) {
 }
 
 void ete_scroll_speed_inc(void) {
-    if (!is_keyboard_master()) return;
-    if (scroll_speed < 200) scroll_speed += 5;   // 好みで刻み変更
+    if (scroll_speed < 200) {
+        scroll_speed += 5;
+    }
 }
 
 void ete_scroll_speed_dec(void) {
-    if (!is_keyboard_master()) return;
-    if (scroll_speed > 30) scroll_speed -= 5;    // 下限
+    if (scroll_speed > 30) {
+        scroll_speed -= 5;
+    }
 }
 
-void ete_scroll_settings_save(void) {
-    if (!is_keyboard_master()) return;
-
-    uint32_t val = eeconfig_read_kb();
-
-    // swap_lr(bit0)は保持、scroll_speed(bits8..1)だけ上書き
-    val &= ~ETE_EECONF_SCROLLSPD_MASK;
-    val |= ((uint32_t)scroll_speed << ETE_EECONF_SCROLLSPD_SHIFT) & ETE_EECONF_SCROLLSPD_MASK;
-
-    eeconfig_update_kb(val);
-}
 
 void ete_cursor_speed_inc(void) {
-    if (!is_keyboard_master()) return;
-    if (cursor_speed < 200) cursor_speed += 5;
+    if (cursor_speed < 200) {
+        cursor_speed += 5;
+    }
 }
 
 void ete_cursor_speed_dec(void) {
-    if (!is_keyboard_master()) return;
-    if (cursor_speed > 50) cursor_speed -= 5;
+    if (cursor_speed > 50) {
+        cursor_speed -= 5;
+    }
 }
 
-uint8_t ete_get_cursor_speed(void) {
-    return cursor_speed;
+void keyboard_post_init_user(void)
+{
+    uint32_t raw = eeconfig_read_kb();
+
+    scroll_speed     = ete_conf_get_scroll_speed(raw);
+    cursor_speed     = ete_conf_get_cursor_speed(raw);
+    swap_lr          = ete_conf_get_swap_lr(raw);
+    inertia_strength = ete_conf_get_inertia(raw);
+
+    uprintf("[LOAD] raw=0x%08lX scroll=%u cursor=%u inertia=%u swap=%u\n",
+        (unsigned long)raw,
+        scroll_speed,
+        cursor_speed,
+        inertia_strength,
+        swap_lr);
 }
 
-void ete_cursor_settings_save(void) {
-    uint32_t val = eeconfig_read_kb();
-
-    val &= ~ETE_EECONF_CURSORSPD_MASK;
-    val |= ((uint32_t)cursor_speed << ETE_EECONF_CURSORSPD_SHIFT)
-           & ETE_EECONF_CURSORSPD_MASK;
-
-    eeconfig_update_kb(val);
+static inline uint8_t to_percent(uint8_t v) {
+    return (v * 100) / 127;
 }
 
 void ete_settings_save(void) {
+    uint32_t raw = eeconfig_read_kb();
+
+    raw = ete_conf_set_scroll_speed(raw, scroll_speed);
+    raw = ete_conf_set_cursor_speed(raw, cursor_speed);
+    raw = ete_conf_set_swap_lr(raw, swap_lr);
+    raw = ete_conf_set_inertia(raw, inertia_strength);
+
+    eeconfig_update_kb(raw);
+    uprintf("[SAVE] scroll=%u cursor=%u inertia=%u (%s)\n",
+        to_percent(scroll_speed),
+        to_percent(cursor_speed),
+        to_percent(inertia_strength),
+        inertia_enabled ? "inertia_ON" : "inertia_OFF"
+    );
+}
+
+void ete_toggle_lr(void) {
+    swap_lr = !swap_lr;
+
     if (!is_keyboard_master()) return;
 
-    uint32_t val = eeconfig_read_kb();
+    uint32_t raw = eeconfig_read_kb();
+    raw = ete_conf_set_swap_lr(raw, swap_lr);
+    eeconfig_update_kb(raw);
 
-    // scroll speed
-    val &= ~ETE_EECONF_SCROLLSPD_MASK;
-    val |= ((uint32_t)scroll_speed << ETE_EECONF_SCROLLSPD_SHIFT)
-           & ETE_EECONF_SCROLLSPD_MASK;
+    uprintf("[SWAP SAVE] raw=0x%08lX swap=%u\n",
+            (unsigned long)raw, swap_lr);
+}
 
-    // cursor speed
-    val &= ~ETE_EECONF_CURSORSPD_MASK;
-    val |= ((uint32_t)cursor_speed << ETE_EECONF_CURSORSPD_SHIFT)
-           & ETE_EECONF_CURSORSPD_MASK;
-    
-    uprintf("SAVE scroll=%d cursor=%d\n", scroll_speed, cursor_speed);
 
-    eeconfig_update_kb(val);
+uint8_t ete_get_inertia(void) {
+    return inertia_strength;
+}
+
+void ete_inertia_inc(void) {
+    if (inertia_strength <= 95) {
+        inertia_strength += 5;
+    } else {
+        inertia_strength = 100;
+    }
+    uprintf("[INERTIA] %u\n", inertia_strength);
+}
+
+
+void ete_inertia_dec(void) {
+    if (inertia_strength >= 5) {
+        inertia_strength -= 5;
+    } else {
+        inertia_strength = 0;
+    }
+    uprintf("[INERTIA] %u\n", inertia_strength);
+}
+
+void ete_toggle_inertia(void) {
+
+    inertia_enabled = !inertia_enabled;
+
+    if (inertia_enabled) {
+        // EEPROMから復元
+        uint32_t raw = eeconfig_read_kb();
+        inertia_strength = ete_conf_get_inertia(raw);
+
+        uprintf("[INERTIA ON] %u\n", inertia_strength);
+    } else {
+        uprintf("[INERTIA OFF]\n");
+    }
 }

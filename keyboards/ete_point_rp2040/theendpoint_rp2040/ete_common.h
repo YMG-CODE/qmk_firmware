@@ -31,9 +31,11 @@ uint8_t ete_get_cursor_speed(void);
 
 void ete_settings_save(void);
 
-
-
-
+// inertia
+uint8_t ete_get_inertia(void);
+void ete_inertia_inc(void);
+void ete_inertia_dec(void);
+void ete_toggle_inertia(void);
 
 // ===== Feature Switches =====
 // rules.mk で -DETE_ENABLE_xxx を指定する
@@ -61,13 +63,7 @@ void ete_on_layer(uint8_t layer);
 void ete_tick(void);
 
 
-// ===== Split transaction IDs (ETE internal) =====
-// SPLIT_TRANSACTION_IDS_KB から参照される
-typedef enum {
-    ETE_GET_INFO,
-    ETE_GET_MOTION,
-    ETE_SET_CPI,
-} ete_split_id_t;
+
 
 
 
