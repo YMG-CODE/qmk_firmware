@@ -37,6 +37,11 @@ bool ete_get_scroll_hold(void);
 uint8_t ete_get_scroll_speed(void);
 static uint8_t cursor_speed = 80;   // 100% = デフォルト
 
+uint8_t ete_get_cursor_speed(void) {
+    return cursor_speed;
+}
+
+
 // ================================
 // 設定
 // ================================
@@ -438,7 +443,6 @@ if (ete_get_scroll_hold()) {
     report.y = 0;
     report.buttons = 0;   // 追加
 
-    return report;
 }
 
 // なだらかデッドゾーン
@@ -579,10 +583,10 @@ report.y = (int)vel_y;
     }
 
     // ★超低速ブースト（ここがキモ）
-    if (fabs(fsv) > 0 && fabs(fsv) < 1.5f) {
+    if (fabs(fsv) > 0 && fabs(fsv) < 2.5f) {
         fsv *= 1.8f;
     }
-    if (fabs(fsh) > 0 && fabs(fsh) < 1.5f) {
+    if (fabs(fsh) > 0 && fabs(fsh) < 2.5f) {
         fsh *= 1.8f;
     }
 
@@ -652,19 +656,43 @@ report.y = (int)vel_y;
     //符号ブレ防止
     // ★入力がある場合
     if (fabs(out_sv) > 0 || fabs(out_sh) > 0) {
+
         float accel;
 
+        // ★ 初動は完全追従
+
+        if (vel_power < 0.3f) {
+            scroll_vel_v = out_sv;
+            scroll_vel_h = out_sh;
+        }
+        else {
+            scroll_vel_v = scroll_vel_v * (1.0f - accel) + out_sv * accel;
+            scroll_vel_h = scroll_vel_h * (1.0f - accel) + out_sh * accel;
+        }
+
         if (vel_power < 0.5f) {
-            accel = 0.18f;                  // ← 初動ブースト
-            accel += inertia * 0.05f;       // ← 慣性弱め
+            out_sv *= 0.7f;
+            out_sh *= 0.7f;
+        }
+
+        if (vel_power < 0.5f) {
+            accel = 0.05f;                  // ← 初動ブースト
+            accel += inertia * 0.03f;       // ← 慣性弱め
         }
         else if (vel_power < 2.0f) {
-            accel = 0.35f;
-            accel += inertia * 0.25f;
+            accel = 0.25f;
+            accel += inertia * 0.20f;
         }
         else {
             accel = 0.6f;
             accel += inertia * 0.2f;
+        }
+
+        if (fabs(scroll_vel_v) < 0.3f) {
+            scroll_vel_v *= 0.6f;
+        }
+        if (fabs(scroll_vel_h) < 0.3f) {
+            scroll_vel_h *= 0.6f;
         }
 
         scroll_vel_v = scroll_vel_v * (1.0f - accel) + out_sv * accel;
@@ -682,11 +710,13 @@ report.y = (int)vel_y;
     if (fabs(scroll_vel_h) < 0.2f) scroll_vel_h = 0;
 
     // ★最大速度制限・フレームレート調整
-    if (scroll_vel_v > 2.5f) scroll_vel_v = 2.5f;
-    if (scroll_vel_v < -2.5f) scroll_vel_v = -2.5f;
+    float max_speed = 1.3f;
 
-    if (scroll_vel_h > 2.5f) scroll_vel_h = 2.5f;
-    if (scroll_vel_h < -2.5f) scroll_vel_h = -2.5f;
+    if (scroll_vel_v >  max_speed) scroll_vel_v =  max_speed;
+    if (scroll_vel_v < -max_speed) scroll_vel_v = -max_speed;
+
+    if (scroll_vel_h >  max_speed) scroll_vel_h =  max_speed;
+    if (scroll_vel_h < -max_speed) scroll_vel_h = -max_speed;
 
     // 出力
     static float scroll_rem_v = 0;
@@ -703,6 +733,13 @@ report.y = (int)vel_y;
 
     report.v = out_v;
     report.h = out_h;
+
+    // ★ スクロール中はカーソル完全停止
+    if (ete_get_scroll_hold()) {
+        report.x = 0;
+        report.y = 0;
+        report.buttons = 0; // ←クリックも殺す
+    }
     
     // ★ここ追加！！！！
     if (report.buttons &&
@@ -746,15 +783,14 @@ report.y = (int)vel_y;
 }
 
 
-report_mouse_t pointing_device_task_user(report_mouse_t report)
-{
-    return ete_pointing_tune(report);
-}
-
 
 
 bool ete_get_swap_state(void) {
     return swap_lr;
+}
+
+void ete_common_set_scroll_hold(bool on) {
+    scroll_hold = on;
 }
 
 
@@ -783,7 +819,6 @@ void ete_scroll_speed_dec(void) {
         scroll_speed -= 5;
     }
 }
-
 
 void ete_cursor_speed_inc(void) {
     if (cursor_speed < 200) {
@@ -820,6 +855,13 @@ static inline uint8_t to_percent(uint8_t v) {
 
 void ete_settings_save(void) {
     uint32_t raw = eeconfig_read_kb();
+    uint8_t save_scroll  = scroll_speed;
+    uint8_t save_cursor  = cursor_speed;
+    uint8_t save_inertia = inertia_strength;
+
+    if (save_scroll < 5)  save_scroll = 40;
+    if (save_cursor < 5)  save_cursor = 5;
+    if (save_inertia > 127) save_inertia = 127;
 
     raw = ete_conf_set_scroll_speed(raw, scroll_speed);
     raw = ete_conf_set_cursor_speed(raw, cursor_speed);
@@ -884,5 +926,460 @@ void ete_toggle_inertia(void) {
         uprintf("[INERTIA ON] %u\n", inertia_strength);
     } else {
         uprintf("[INERTIA OFF]\n");
+    }
+}
+
+
+// void ete_apply_pointing(report_mouse_t *r, bool is_scroll) {
+
+//     // 👉 値渡し関数なのでこうする
+//     *r = ete_pointing_tune(*r);
+
+//     if (is_scroll) {
+//         r->h = r->x / scroll_speed;
+//         r->v = r->y / scroll_speed;
+//         r->x = 0;
+//         r->y = 0;
+//     }
+// }
+// void ete_apply_pointing(report_mouse_t *r, bool is_scroll) {
+
+//     float cursor_scale = (float)ete_get_cursor_speed() / 100.0f;
+
+//     // --- カーソルスケール ---
+//     if (!is_scroll) {
+//         r->x = (int16_t)(r->x * cursor_scale);
+//         r->y = (int16_t)(r->y * cursor_scale);
+//     }
+
+//     // --- 慣性 ---
+//     if (ete_get_inertia() > 0) {
+//         static float vx = 0, vy = 0;
+
+//         float friction = 0.85f;
+
+//         vx = vx * friction + r->x;
+//         vy = vy * friction + r->y;
+
+//         r->x = (int16_t)vx;
+//         r->y = (int16_t)vy;
+//     }
+
+//     // --- スクロール ---
+//     if (is_scroll) {
+//         uint8_t div = ete_get_scroll_speed();
+//         if (div == 0) div = 1;
+
+//         r->h = r->x / div;
+//         r->v = r->y / div;
+
+//         r->x = 0;
+//         r->y = 0;
+//     }
+// }
+void ete_apply_pointing(report_mouse_t *r, bool is_scroll, bool is_pad) {
+
+    float cs = (float)cursor_speed / 127.0f;
+    float cursor_scale = cs * cs * 0.5f;
+
+    // PAD補正
+    cursor_scale *= 0.5f;
+    if (cursor_scale < 0.05f) cursor_scale = 0.05f;
+
+    // ★ 慣性用（全体で共有）
+    static float sh = 0, sv = 0;
+    static float rem_h = 0, rem_v = 0;
+    static bool inertia_active = false;
+    static uint16_t stop_timer = 0;
+
+    // =========================
+    // PAD
+    // =========================
+    if (is_pad) {
+
+        // ★ タップで慣性停止（ここが最重要）
+        if (r->buttons && inertia_active) {
+            sh = 0;
+            sv = 0;
+            rem_h = 0;
+            rem_v = 0;
+            inertia_active = false;
+            stop_timer = 5;  // ←ここ重要（20フレーム止める）
+
+            r->h = 0;
+            r->v = 0;
+            r->x = 0;
+            r->y = 0;
+            return;
+        }
+
+        // 速度0防止
+        uint8_t scr = ete_get_scroll_speed();
+        if (scr < 5) scr = 5;
+
+        float ss = (float)scr / 127.0f;
+        float scroll_scale = ss * ss *  0.03f;
+        if (scroll_scale < 0.03f) scroll_scale = 0.03f;
+
+        // =========================
+        // スクロールモード（1本指）
+        // =========================
+        if (is_scroll) {
+
+            // ★ 停止直後は入力無効
+            if (stop_timer > 0) {
+                stop_timer--;
+
+                r->h = 0;
+                r->v = 0;
+                r->x = 0;
+                r->y = 0;
+                return;
+            }
+
+            r->h = 0;
+            r->v = 0;
+
+            float norm = 0.35f;
+            // ★ タップ時の誤フリック防止
+            if (fabsf(r->x) < 2 && fabsf(r->y) < 2) {
+                r->x = 0;
+                r->y = 0;
+            }
+            
+            float x = r->x * norm;
+            float y = r->y * norm;
+
+            float input_h = x * scroll_scale * 2.0f;
+            float input_v = y * scroll_scale * 2.0f;
+
+            float inertia = ete_get_inertia() / 100.0f;
+
+            float decay  = 0.95f + inertia * 0.05f;
+            float gain   = 1.0f + inertia * 0.1f;
+            float follow = 0.35f - inertia * 0.10f;
+            if (follow < 0.15f) follow = 0.15f;
+
+            input_h *= gain;
+            input_v *= gain;
+
+            float mag = fabsf(input_h) + fabsf(input_v);
+
+            // ★ 低速時だけ強く減衰
+            if (mag < 1.5f) {
+                float damp = mag / 1.5f;   // 0〜1
+                damp = damp * damp;        // カーブ強化（超重要）
+
+                input_h *= damp;
+                input_v *= damp;
+            }
+
+            // ★ 高速圧縮
+            if (mag > 4.0f) {
+                float scale = 1.5f / mag;
+                input_h *= scale;
+                input_v *= scale;
+            }
+
+            if (inertia_enabled) {
+                if (fabsf(input_h) > 0.01f || fabsf(input_v) > 0.01f) {
+                    sh = sh * (1.0f - follow) + input_h * follow;
+                    sv = sv * (1.0f - follow) + input_v * follow;
+                } else {
+                    sh *= decay;
+                    sv *= decay;
+                }
+            } else {
+                sh = input_h;
+                sv = input_v;
+            }
+
+            // ★ 慣性状態更新
+            float speed = fabsf(sh) + fabsf(sv);
+
+            // ★ 一定以上の速度だけ慣性ON
+            if (speed > 1.2f) {
+                inertia_active = true;
+            } else {
+                inertia_active = false;
+            }
+
+            // ★ ピタ止め
+            if (fabsf(sh) < 0.01f) sh = 0;
+            if (fabsf(sv) < 0.01f) sv = 0;
+
+            // ★ 最大速度制限（これが本命）
+            float max_speed = 2.0f;
+
+            if (sh >  max_speed) sh =  max_speed;
+            if (sh < -max_speed) sh = -max_speed;
+            if (sv >  max_speed) sv =  max_speed;
+            if (sv < -max_speed) sv = -max_speed;
+
+            // ★ サブピクセル
+            rem_h += sh;
+            rem_v += sv;
+
+            int16_t out_h = (int16_t)rem_h;
+            int16_t out_v = (int16_t)rem_v;
+
+            rem_h -= out_h;
+            rem_v -= out_v;
+
+            r->h = -out_h;
+            r->v =  out_v;
+
+            r->x = 0;
+            r->y = 0;
+            return;
+        }
+
+    // =========================
+    // ネイティブ2点スクロール（慣性化）
+    // =========================
+    if (r->h != 0 || r->v != 0 || inertia_active) {
+
+        // ★ 停止直後は入力無効（既存ロジックと統一）
+        if (stop_timer > 0) {
+            stop_timer--;
+
+            r->h = 0;
+            r->v = 0;
+            return;
+        }
+        // ★ Azoteqは小さいので増幅して揃える
+        float norm = 1.0f;
+        float input_h = r->h * norm * scroll_scale * 2.0f;
+        float input_v = r->v * norm * scroll_scale * 2.0f;
+
+        float inertia = ete_get_inertia() / 100.0f;
+        float gain = 1.0f + inertia * 0.1f;
+
+        input_h *= gain;
+        input_v *= gain;
+        
+        float decay  = 0.95f + inertia * 0.06f;
+        float follow = 0.25f - inertia * 0.10f;
+        if (follow < 0.12f) follow = 0.12f;
+
+        if (inertia_enabled) {
+            float input_mag = fabsf(input_h) + fabsf(input_v);
+            if (input_mag > 0.05f){
+                sh = sh * (1.0f - follow) + input_h * follow;
+                sv = sv * (1.0f - follow) + input_v * follow;
+            } else {
+                sh *= decay;
+                sv *= decay;
+            }
+        } else {
+            sh = input_h;
+            sv = input_v;
+        }
+
+        float mag = fabsf(input_h) + fabsf(input_v);
+
+        // ★ 低速時だけ強く減衰
+        if (mag < 1.5f) {
+            float damp = mag / 1.5f;   // 0〜1
+            damp = damp * damp;        // カーブ強化（超重要）
+
+            input_h *= damp;
+            input_v *= damp;
+        }
+
+        // ★ 高速圧縮
+        if (mag > 4.0f) {
+            float scale = 0.5f / mag;
+            input_h *= scale;
+            input_v *= scale;
+        }
+
+        // ★ 慣性状態更新（共通）
+        float speed = fabsf(sh) + fabsf(sv);
+
+        // ★ 一定以上の速度だけ慣性ON
+        if (speed > 1.0f) {
+            inertia_active = true;
+        } else {
+            inertia_active = false;
+        }
+
+        // ★ ピタ止め
+        if (fabsf(sh) < 0.01f) sh = 0;
+        if (fabsf(sv) < 0.01f) sv = 0;
+
+        // ★ サブピクセル（共通）
+        rem_h += sh;
+        rem_v += sv;
+
+        int16_t out_h = (int16_t)rem_h;
+        int16_t out_v = (int16_t)rem_v;
+
+        rem_h -= out_h;
+        rem_v -= out_v;
+
+        r->h = out_h;
+        r->v = out_v;
+
+        r->x = 0;
+        r->y = 0;
+        return;
+    }
+
+        // =========================
+        // カーソル
+        // =========================
+        float fx = (float)r->x;
+        float fy = (float)r->y;
+
+        if (fabsf(fx) > 0 && fabsf(fx) < 3.0f) fx *= 1.8f;
+        if (fabsf(fy) > 0 && fabsf(fy) < 3.0f) fy *= 1.8f;
+
+        float dead = 0.5f;
+        if (fabsf(fx) < dead) fx *= 0.6f;
+        if (fabsf(fy) < dead) fy *= 0.6f;
+
+        fx *= cursor_scale;
+        fy *= cursor_scale;
+
+        float mag = fabsf(fx) + fabsf(fy);
+        if (mag < 2.0f) {
+            fx *= 0.6f;
+            fy *= 0.6f;
+        }
+
+// ======================
+// ★ velocityモデル（tune移植）
+// ======================
+
+static float vel_x = 0;
+static float vel_y = 0;
+if (r->buttons) {
+    vel_x = 0;
+    vel_y = 0;
+}
+
+float input_x = fx;
+float input_y = fy;
+
+float speed = fabsf(input_x) + fabsf(input_y);
+
+    float inertia = inertia_enabled
+        ? (float)ete_get_inertia() / 100.0f
+        : 0.0f;
+
+    // ★ 低速精密時は慣性を弱める / 切る
+    if (speed < 1.8f) {
+        inertia = 0.0f;          // 完全OFF
+    }
+    else if (speed < 2.0f) {
+        inertia *= 0.20f;        // かなり弱く
+    }
+    else if (speed < 5.0f) {
+        inertia *= 0.50f;        // 中速は少し効かせる
+    }
+    else {
+        inertia *= 1.0f;         // 高速だけしっかり効かせる
+    }
+
+    if (speed > 0.01f) {
+
+        float accel;
+
+        // ★ 低速ほど追従重視
+        if (speed < 0.8f) {
+            accel = 0.35f;
+        }
+        else if (speed < 2.0f) {
+            accel = 0.20f;
+        }
+        else if (speed < 6.0f) {
+            accel = 0.16f;
+        }
+        else {
+            accel = 0.24f;
+        }
+
+        accel += inertia * 0.06f;
+
+        vel_x = vel_x * (1.0f - accel) + input_x * accel;
+        vel_y = vel_y * (1.0f - accel) + input_y * accel;
+
+        } else {
+
+            float last_speed = fabsf(vel_x) + fabsf(vel_y);
+
+            // ★ 超低速だけ即停止（精密終端）
+            if (!inertia_enabled || last_speed < 0.45f) {
+
+                vel_x = 0;
+                vel_y = 0;
+
+            } else {
+
+                float decay = 0.96f + inertia * 0.37f;
+
+                vel_x *= decay;
+                vel_y *= decay;
+
+                // ★ 軸ブレ補正（小さい軸を消す）
+                if (fabsf(vel_x) > fabsf(vel_y) * 2.5f) vel_y *= 0.2f;
+                if (fabsf(vel_y) > fabsf(vel_x) * 2.5f) vel_x *= 0.2f;
+            }
+
+            // ★ 最終停止
+            if (fabsf(vel_x) < 0.02f) vel_x = 0;
+            if (fabsf(vel_y) < 0.02f) vel_y = 0;
+        }
+        if (fabsf(vel_x) < 0.05f) vel_x = 0;
+        if (fabsf(vel_y) < 0.05f) vel_y = 0;
+
+         // ★ サブピクセル（超重要）
+        static float rem_x = 0, rem_y = 0;
+
+        if (fabsf(vel_x) < 0.03f) rem_x = 0;
+        if (fabsf(vel_y) < 0.03f) rem_y = 0;
+
+        rem_x += vel_x;
+        rem_y += vel_y;
+
+        int16_t out_x = (int16_t)rem_x;
+        int16_t out_y = (int16_t)rem_y;
+
+        rem_x -= out_x;
+        rem_y -= out_y;
+
+        r->x = out_x;
+        r->y = out_y;
+        return;
+    }
+
+    // =========================
+    // BALL
+    // =========================
+    if (!is_scroll) {
+        r->x = (int16_t)(r->x * cursor_scale);
+        r->y = (int16_t)(r->y * cursor_scale);
+    }
+
+    if (ete_get_inertia() > 0) {
+        static float vx = 0, vy = 0;
+        float friction = 0.85f;
+
+        vx = vx * friction + r->x;
+        vy = vy * friction + r->y;
+
+        r->x = (int16_t)vx;
+        r->y = (int16_t)vy;
+    }
+
+    if (is_scroll) {
+        uint8_t div = ete_get_scroll_speed();
+        if (div < 1) div = 1;
+
+        r->h = r->x / div;
+        r->v = r->y / div;
+        r->x = 0;
+        r->y = 0;
     }
 }

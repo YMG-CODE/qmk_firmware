@@ -5,7 +5,7 @@
 #include "quantum.h"
 #include "pointing_device.h"
 
-report_mouse_t ete_pointing_tune(report_mouse_t report);
+
 void ete_toggle_lr(void);
 bool ete_get_swap_state(void);
 
@@ -18,6 +18,8 @@ void    ETE_set_scroll_mode(bool mode);
 // scroll mode (hold)
 void ete_set_scroll_hold(bool on);
 bool ete_get_scroll_hold(void);
+
+void ete_common_set_scroll_hold(bool on);
 
 // scroll speed
 void ete_scroll_speed_inc(void);
@@ -36,6 +38,13 @@ uint8_t ete_get_inertia(void);
 void ete_inertia_inc(void);
 void ete_inertia_dec(void);
 void ete_toggle_inertia(void);
+
+//　トラックボールレポート
+report_mouse_t ete_ball_tune(report_mouse_t report);
+
+void ete_ball_gain_add(float v);
+void ete_ball_friction_add(float v);
+void ete_ball_deadzone_add(float v);
 
 // ===== Feature Switches =====
 // rules.mk で -DETE_ENABLE_xxx を指定する
@@ -64,7 +73,11 @@ void ete_tick(void);
 
 
 
+report_mouse_t ete_ball_tune(report_mouse_t in);
 
+report_mouse_t ete_get_ball_report(report_mouse_t mouse_report);
 
+report_mouse_t ete_pointing_tune(report_mouse_t report);
 
-
+// void ete_apply_pointing(report_mouse_t *report, bool is_scroll);
+void ete_apply_pointing(report_mouse_t *report, bool is_scroll, bool is_pad);
