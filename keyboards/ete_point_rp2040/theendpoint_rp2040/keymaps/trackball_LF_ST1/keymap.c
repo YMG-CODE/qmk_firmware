@@ -7,22 +7,32 @@
 
 enum ETE_keycodes {
     ETE_SAFE_RANGE = SAFE_RANGE,
+    //----トラックボール用カスタムキーコード------
     REC_RST, // ETE configuration: reset to default
     REC_SAVE, // ETE configuration: save to EEPROM
-
     CPI_I100, // CPI +100 CPI
     CPI_D100, // CPI -100 CPI
     CPI_I1K, // CPI +1000 CPI
     CPI_D1K, // CPI -1000 CPI
-
-    // In scroll mode, motion from primary trackball is treated as scroll
-    // wheel.
     SCRL_TO, // Toggle scroll mode
     SCRL_MO, // Momentary scroll mode
     SCRL_DVI, // Increment scroll divider
     SCRL_DVD, // Decrement scroll divider
+
+    //----トラックパッド用カスタムキーコード------
+    LR_SWAP = SAFE_RANGE,//スクロール/カーソルモード切替
+    SCRL_HOLD = SAFE_RANGE, //押している間スクロール
+    SCRL_UP,//スクロール速度+
+    SCRL_DN,//スクロール速度-
+    SCRL_SAVE,//設定保存
+    CURSOR_UP,//カーソル速度+
+    CURSOR_DN,//カーソル速度-
+    INERTIA_UP,//慣性+
+    INERTIA_DN,//慣性-
+    INERTIA_TOGGLE,//慣性On/Off
 };
 
+//----トラックボール用カスタムキーコード------
 #define REC_RST QK_KB_0
 #define REC_SAVE QK_KB_1
 #define CPI_I100 QK_KB_2
@@ -33,6 +43,18 @@ enum ETE_keycodes {
 #define SCRL_MO QK_KB_7
 #define SCRL_DVI QK_KB_8
 #define SCRL_DVD QK_KB_9
+
+//----トラックパッド用カスタムキーコード------
+#define LR_SWAP QK_KB_10
+#define SCRL_HOLD QK_KB_11
+#define SCRL_UP QK_KB_12       
+#define SCRL_DN QK_KB_13            
+#define SCRL_SAVE QK_KB_14
+#define CURSOR_UP QK_KB_15
+#define CURSOR_DN QK_KB_16
+#define INERTIA_UP QK_KB_17
+#define INERTIA_DN QK_KB_18
+#define INERTIA_TOGGLE QK_KB_19
 
 //#include "i2c_master.h"
 #include "timer.h"
@@ -182,11 +204,68 @@ void matrix_init_user(void) {
     ete_init();
 }
 
-bool process_record_user(uint16_t keycode, keyrecord_t *record) {
-    ete_on_key(keycode, record);
-    return true;
-}
+
 
 void matrix_scan_user(void) {
     ete_tick();
+}
+
+
+bool process_record_user(uint16_t keycode, keyrecord_t *record) {
+    ete_on_key(keycode, record);   // ← これ必須
+
+    switch (keycode) {
+        case LR_SWAP:
+            if (record->event.pressed) {
+                ete_toggle_lr();
+            }
+            return false;
+
+        case SCRL_SAVE:
+            if (record->event.pressed) {
+                ete_settings_save();
+            }
+            return false;
+
+        case SCRL_HOLD:
+            // ★ 押下/解放の両方で呼ぶ
+            ete_set_scroll_hold(record->event.pressed);
+            return false;
+
+        case SCRL_UP:
+            if (record->event.pressed) ete_scroll_speed_inc();
+            return false;
+
+        case SCRL_DN:
+            if (record->event.pressed) ete_scroll_speed_dec();
+            return false;
+
+
+        case CURSOR_UP:
+            if (record->event.pressed) ete_cursor_speed_inc();
+            return false;
+
+        case CURSOR_DN:
+            if (record->event.pressed) ete_cursor_speed_dec();
+            return false;
+
+        case INERTIA_UP:
+                if (record->event.pressed)
+                    ete_inertia_inc();
+                return false;
+
+            case INERTIA_DN:
+                if (record->event.pressed)
+                    ete_inertia_dec();
+                return false; 
+
+        case INERTIA_TOGGLE:
+                if (record->event.pressed) {
+                    ete_toggle_inertia();
+                }
+                return false;
+                                        
+    }
+
+    return true;
 }

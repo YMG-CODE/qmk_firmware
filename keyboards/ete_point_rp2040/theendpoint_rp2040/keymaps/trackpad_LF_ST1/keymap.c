@@ -4,33 +4,38 @@
 #include QMK_KEYBOARD_H
 #include "quantum.h"
 #include <stdio.h>
+#include "ete_common.h"
 #include "pointing_device.h"
+
 
 enum ETE_keycodes {
     ETE_SAFE_RANGE = SAFE_RANGE,
+    //----トラックボール用カスタムキーコード------
     REC_RST, // ETE configuration: reset to default
     REC_SAVE, // ETE configuration: save to EEPROM
-
     CPI_I100, // CPI +100 CPI
     CPI_D100, // CPI -100 CPI
     CPI_I1K, // CPI +1000 CPI
     CPI_D1K, // CPI -1000 CPI
-
-    // In scroll mode, motion from primary trackball is treated as scroll
-    // wheel.
     SCRL_TO, // Toggle scroll mode
     SCRL_MO, // Momentary scroll mode
     SCRL_DVI, // Increment scroll divider
     SCRL_DVD, // Decrement scroll divider
 
-    LR_SWAP = SAFE_RANGE,
-    SCRL_HOLD = SAFE_RANGE, // ① 押している間スクロール
-    SCRL_UP,                // ② 速度+
-    SCRL_DN,                // ② 速度-
-    SCRL_SAVE,              // ③ 保存
+    //----トラックパッド用カスタムキーコード------
+    LR_SWAP = SAFE_RANGE,//スクロール/カーソルモード切替
+    SCRL_HOLD = SAFE_RANGE, //押している間スクロール
+    SCRL_UP,//スクロール速度+
+    SCRL_DN,//スクロール速度-
+    SCRL_SAVE,//設定保存
+    CURSOR_UP,//カーソル速度+
+    CURSOR_DN,//カーソル速度-
+    INERTIA_UP,//慣性+
+    INERTIA_DN,//慣性-
+    INERTIA_TOGGLE,//慣性On/Off
 };
 
-//トラックボール
+//----トラックボール用カスタムキーコード------
 #define REC_RST QK_KB_0
 #define REC_SAVE QK_KB_1
 #define CPI_I100 QK_KB_2
@@ -42,12 +47,18 @@ enum ETE_keycodes {
 #define SCRL_DVI QK_KB_8
 #define SCRL_DVD QK_KB_9
 
-//トラックパッド
+//----トラックパッド用カスタムキーコード------
 #define LR_SWAP QK_KB_10
 #define SCRL_HOLD QK_KB_11
 #define SCRL_UP QK_KB_12       
 #define SCRL_DN QK_KB_13            
 #define SCRL_SAVE QK_KB_14
+#define CURSOR_UP QK_KB_15
+#define CURSOR_DN QK_KB_16
+#define INERTIA_UP QK_KB_17
+#define INERTIA_DN QK_KB_18
+#define INERTIA_TOGGLE QK_KB_19
+
 
 //#include "i2c_master.h"
 #include "timer.h"
@@ -75,7 +86,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
   //|--------+--------+--------+--------+--------+--------+--------+---------|  |--------+--------+--------+--------+--------+--------+--------+---------|
       KC_LCTL, KC_Z,    KC_X,    KC_C,   KC_V,    KC_B,    KC_END,  KC_END,       KC_LEFT, KC_RGHT, KC_N,    KC_M,   KC_COMM,  KC_DOT, KC_SLSH,  KC_BSLS,
   //|--------+--------+--------+--------+--------+--------+--------+---------|  |--------+--------+--------+--------+--------+--------+--------+---------|
-      KC_TAB,  KC_LALT, KC_LGUI, KC_PSCR, XXXXXXX,MO(1),  KC_DEL,  KC_HOME,       KC_END,   KC_DOWN, MO(2) ,XXXXXXX,KC_BSPC,  KC_DEL, KC_RALT,  KC_AT 
+      KC_TAB,  SCRL_MO, KC_LGUI, KC_PSCR, XXXXXXX,MO(1),  KC_DEL,  KC_HOME,       KC_END,   KC_DOWN, MO(2) ,XXXXXXX,KC_BSPC,  KC_DEL, KC_RALT,  KC_AT 
   //|--------+--------+--------+--------+--------+--------+--------+---------|  |--------+--------+--------+--------+--------+--------+--------+---------|
                                                                                                                      
   ),
@@ -138,37 +149,6 @@ layer_state_t layer_state_set_user(layer_state_t state) {
 }
 
 
-report_mouse_t pointing_device_task_combined_user(
-    report_mouse_t left,
-    report_mouse_t right
-) {
-    bool swap = ete_get_swap_state();
-
-    if (!swap) {
-        // 通常
-        left.h = -(left.x / 2);
-        left.v =  (left.y / 2);
-        left.x = 0;
-        left.y = 0;
-        left.buttons = 0;
-
-        right.h = -right.h;
-    } else {
-        // 入れ替え
-        right.h = -(right.x / 2);
-        right.v =  (right.y / 2);
-        right.x = 0;
-        right.y = 0;
-        right.buttons = 0;
-
-        left.h = -left.h;
-    }
-
-    report_mouse_t merged =
-        pointing_device_combine_reports(left, right);
-
-    return ete_pointing_tune(merged);
-}
 
 bool encoder_update_user(uint8_t index, bool clockwise) {
     keypos_t key;
@@ -201,6 +181,39 @@ bool encoder_update_user(uint8_t index, bool clockwise) {
 return false; 
 }
 
+
+report_mouse_t pointing_device_task_combined_user(
+    report_mouse_t left,
+    report_mouse_t right
+) {
+    bool swap = ete_get_swap_state();
+
+    if (!swap) {
+        // 通常
+        left.h = -(left.x / 2);
+        left.v =  (left.y / 2);
+        left.x = 0;
+        left.y = 0;
+        left.buttons = 0;
+
+        right.h = -right.h;
+    } else {
+        // 入れ替え
+        right.h = -(right.x / 2);
+        right.v =  (right.y / 2);
+        right.x = 0;
+        right.y = 0;
+        right.buttons = 0;
+
+        left.h = -left.h;
+    }
+
+    report_mouse_t merged =
+        pointing_device_combine_reports(left, right);
+
+    return ete_pointing_tune(merged);
+}
+
 const matrix_row_t matrix_mask[MATRIX_ROWS] = {
     0b00001111, // row 0: cols 0,1,2,3
     0b00001111, // row 1: cols 0,1,2,3
@@ -220,6 +233,16 @@ const matrix_row_t matrix_mask[MATRIX_ROWS] = {
     0b11110000, // row15: cols 4,5,6,7
 };
 
+void matrix_init_user(void) {
+    ete_init();
+}
+
+void matrix_scan_user(void) {
+    ete_tick();
+}
+
+
+
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     ete_on_key(keycode, record);   // ← これ必須
 
@@ -227,6 +250,12 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         case LR_SWAP:
             if (record->event.pressed) {
                 ete_toggle_lr();
+            }
+            return false;
+
+        case SCRL_SAVE:
+            if (record->event.pressed) {
+                ete_settings_save();
             }
             return false;
 
@@ -243,18 +272,32 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
             if (record->event.pressed) ete_scroll_speed_dec();
             return false;
 
-        case SCRL_SAVE:
-            if (record->event.pressed) ete_scroll_settings_save();
+
+        case CURSOR_UP:
+            if (record->event.pressed) ete_cursor_speed_inc();
             return false;
+
+        case CURSOR_DN:
+            if (record->event.pressed) ete_cursor_speed_dec();
+            return false;
+
+        case INERTIA_UP:
+                if (record->event.pressed)
+                    ete_inertia_inc();
+                return false;
+
+            case INERTIA_DN:
+                if (record->event.pressed)
+                    ete_inertia_dec();
+                return false; 
+
+        case INERTIA_TOGGLE:
+                if (record->event.pressed) {
+                    ete_toggle_inertia();
+                }
+                return false;
+                                        
     }
 
     return true;
-}
-
-void matrix_init_user(void) {
-    ete_init();
-}
-
-void matrix_scan_user(void) {
-    ete_tick();
 }

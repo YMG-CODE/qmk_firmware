@@ -86,7 +86,6 @@ float scroll_accumulated_v = 0;
 
 
 
-
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     [0] = LAYOUT(
    //,---------------------------------------------------------------------.     ,-----------------------------------------------------------------------.
@@ -192,7 +191,6 @@ return false;
 
 
 
-
 const matrix_row_t matrix_mask[MATRIX_ROWS] = {
     0b00001111, // row 0: cols 0,1,2,3
     0b00001111, // row 1: cols 0,1,2,3
@@ -221,15 +219,39 @@ void matrix_scan_user(void) {
 }
 
 
-//POINTING DEVICE Rightをカーソル移動、Leftをスクロール（Master Right）
-report_mouse_t pointing_device_task_combined_user(report_mouse_t left_report, report_mouse_t right_report) {
-    left_report.h = left_report.x/4;//除数でスクロールの速度を調整1-4
-    left_report.v = left_report.y/4;//除数でスクロールの速度を調整1-4
-    left_report.x = 0;
-    left_report.y = 0;
-    return pointing_device_combine_reports(left_report, right_report);
-}
+// report_mouse_t pointing_device_task_combined_user(
+//     report_mouse_t left,
+//     report_mouse_t right
+// ) {
+//     // MASTER_RIGHT / 左=PAD / 右=BALL 前提
+//     bool pad_as_scroll = ete_get_scroll_hold() || ete_get_swap_state();
 
+//     ete_apply_pointing(&left, pad_as_scroll);
+
+//     return pointing_device_combine_reports(left, right);
+// }
+
+report_mouse_t pointing_device_task_combined_user(
+    report_mouse_t left,
+    report_mouse_t right
+) {
+    bool swap = ete_get_swap_state();
+    bool hold = ete_get_scroll_hold();
+
+    bool pad_as_scroll = hold || swap;
+
+   ete_apply_pointing(&left, pad_as_scroll, true);   // PAD
+   ete_apply_pointing(&right, false, false);         // BALL
+
+    if (swap) {
+        right.h = -right.h;
+    }
+
+    return pointing_device_combine_reports(left, right);
+        report_mouse_t r = pointing_device_combine_reports(left, right);
+
+    return ete_pointing_tune(r);
+}
 
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     ete_on_key(keycode, record);   // ← これ必須

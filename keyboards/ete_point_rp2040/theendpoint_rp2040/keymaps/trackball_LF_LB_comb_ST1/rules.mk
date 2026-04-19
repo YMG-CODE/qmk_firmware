@@ -17,7 +17,7 @@ QUANTUM_LIB_SRC += spi_master.c # Optical sensor use SPI to communicate
 I2C_ENABLE = yes
 I2C_DRIVER_REQUIRED = yes
 #SRC += M5meter.c
-RAW_HID_ENABLE = yes
+#RAW_HID_ENABLE = yes
 
 CONSOLE_ENABLE = yes
 

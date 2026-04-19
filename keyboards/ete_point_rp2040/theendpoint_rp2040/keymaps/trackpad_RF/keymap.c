@@ -9,31 +9,32 @@
 
 enum ETE_keycodes {
     ETE_SAFE_RANGE = SAFE_RANGE,
+    //----トラックボール用カスタムキーコード------
     REC_RST, // ETE configuration: reset to default
     REC_SAVE, // ETE configuration: save to EEPROM
-
     CPI_I100, // CPI +100 CPI
     CPI_D100, // CPI -100 CPI
     CPI_I1K, // CPI +1000 CPI
     CPI_D1K, // CPI -1000 CPI
-
-    // In scroll mode, motion from primary trackball is treated as scroll
-    // wheel.
     SCRL_TO, // Toggle scroll mode
     SCRL_MO, // Momentary scroll mode
     SCRL_DVI, // Increment scroll divider
     SCRL_DVD, // Decrement scroll divider
 
-    LR_SWAP = SAFE_RANGE,
-
-    SCRL_HOLD = SAFE_RANGE, // ① 押している間スクロール
-    SCRL_UP,                // ② 速度+
-    SCRL_DN,                // ② 速度-
-    SCRL_SAVE,              // ③ 保存
-    CURSOR_UP,
-    CURSOR_DN,
+    //----トラックパッド用カスタムキーコード------
+    LR_SWAP = SAFE_RANGE,//スクロール/カーソルモード切替
+    SCRL_HOLD = SAFE_RANGE, //押している間スクロール
+    SCRL_UP,//スクロール速度+
+    SCRL_DN,//スクロール速度-
+    SCRL_SAVE,//設定保存
+    CURSOR_UP,//カーソル速度+
+    CURSOR_DN,//カーソル速度-
+    INERTIA_UP,//慣性+
+    INERTIA_DN,//慣性-
+    INERTIA_TOGGLE,//慣性On/Off
 };
 
+//----トラックボール用カスタムキーコード------
 #define REC_RST QK_KB_0
 #define REC_SAVE QK_KB_1
 #define CPI_I100 QK_KB_2
@@ -45,6 +46,7 @@ enum ETE_keycodes {
 #define SCRL_DVI QK_KB_8
 #define SCRL_DVD QK_KB_9
 
+//----トラックパッド用カスタムキーコード------
 #define LR_SWAP QK_KB_10
 #define SCRL_HOLD QK_KB_11
 #define SCRL_UP QK_KB_12       
@@ -52,7 +54,9 @@ enum ETE_keycodes {
 #define SCRL_SAVE QK_KB_14
 #define CURSOR_UP QK_KB_15
 #define CURSOR_DN QK_KB_16
-
+#define INERTIA_UP QK_KB_17
+#define INERTIA_DN QK_KB_18
+#define INERTIA_TOGGLE QK_KB_19
 
 
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
@@ -105,6 +109,9 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 };
 // clang-format on
 
+void matrix_init_user(void) {
+    ete_init();
+}
 
 #ifdef POINTING_DEVICE_AUTO_MOUSE_ENABLE
 layer_state_t layer_state_set_user(layer_state_t state) {
@@ -120,7 +127,6 @@ layer_state_t layer_state_set_user(layer_state_t state) {
     return state;
 }
 #endif
-
 
 report_mouse_t pointing_device_task_combined_user(
     report_mouse_t left,
@@ -178,9 +184,9 @@ bool encoder_update_user(uint8_t index, bool clockwise) {
          key.col = 1;
        }
       
-       uint8_t layer = layer_switch_get_layer(key);
-       uint8_t keycode = keymap_key_to_keycode(layer,key);
-       tap_code16(keycode);
+    uint8_t layer = layer_switch_get_layer(key);
+    uint8_t keycode = keymap_key_to_keycode(layer,key);
+    tap_code16(keycode);
 }
 return false; 
 }
@@ -241,8 +247,22 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         case CURSOR_DN:
             if (record->event.pressed) ete_cursor_speed_dec();
             return false;
-            
-    }
 
+        case INERTIA_UP:
+                if (record->event.pressed)
+                    ete_inertia_inc();
+                return false;
+
+            case INERTIA_DN:
+                if (record->event.pressed)
+                    ete_inertia_dec();
+                return false; 
+
+        case INERTIA_TOGGLE:
+                if (record->event.pressed) {
+                    ete_toggle_inertia();
+                }
+                return false;                            
+    }
     return true;
 }
