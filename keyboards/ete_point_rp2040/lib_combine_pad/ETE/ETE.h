@@ -63,45 +63,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 // Types
 
-enum ETE_keycodes {
-    ETE_SAFE_RANGE = SAFE_RANGE,
-    //----トラックボール用カスタムキーコード------
-    REC_RST, // ETE configuration: reset to default
-    REC_SAVE, // ETE configuration: save to EEPROM
-    CPI_I100, // CPI +100 CPI
-    CPI_D100, // CPI -100 CPI
-    CPI_I1K, // CPI +1000 CPI
-    CPI_D1K, // CPI -1000 CPI
-    SCRL_TO, // Toggle scroll mode
-    SCRL_MO, // Momentary scroll mode
-    SCRL_DVI, // Increment scroll divider
-    SCRL_DVD, // Decrement scroll divider
-
-    //----トラックパッド用カスタムキーコード------
-    LR_SWAP = SAFE_RANGE,//スクロール/カーソルモード切替
-    SCRL_HOLD = SAFE_RANGE, //押している間スクロール
-    SCRL_UP,//スクロール速度+
-    SCRL_DN,//スクロール速度-
-    SCRL_SAVE,//設定保存
-    CURSOR_UP,//カーソル速度+
-    CURSOR_DN,//カーソル速度-
-    INERTIA_UP,//慣性+
-    INERTIA_DN,//慣性-
-    INERTIA_TOGGLE,//慣性On/Off
-};
-
-//----トラックボール用カスタムキーコード------
-#define REC_RST QK_KB_0
-#define REC_SAVE QK_KB_1
-#define CPI_I100 QK_KB_2
-#define CPI_D100 QK_KB_3
-#define CPI_I1K QK_KB_4
-#define CPI_D1K QK_KB_5
-#define SCRL_TO QK_KB_6
-#define SCRL_MO QK_KB_7
-#define SCRL_DVI QK_KB_8
-#define SCRL_DVD QK_KB_9
-
 
 typedef struct {
     uint32_t raw;
@@ -259,3 +220,5 @@ uint8_t ETE_get_cpi(void);
 
 // TODO: document
 void ETE_set_cpi(uint8_t cpi);
+
+bool ete_process_ball_key(uint16_t keycode, keyrecord_t *record);

@@ -40,6 +40,12 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "quantum.h"
 #include <math.h>
 
+#include "pointing_device.h"
+#include "drivers/pmw3360/pmw3360.h"
+#include "drivers/sensors/azoteq_iqs5xx.h"
+#include "ete_common.h"
+
+
 #ifdef BACKLIGHT_ENABLE
 #    include "backlight.h"
 #endif
@@ -116,11 +122,22 @@ static void add_scroll_div(int8_t delta) {
 // Pointing device driver
 
 void pointing_device_driver_init(void) {
+    dprintf("CUSTOM INIT\n"); 
+    dprintf("PMW init start\n");
     ETE.this_have_ball = pmw3360_init();
+    if (!ETE.this_have_ball) {
+    dprintf("PMW INIT FAILED\n");
+    }
+    dprintf("PMW init result: %d\n", ETE.this_have_ball);
+    azoteq_iqs5xx_init();
     if (ETE.this_have_ball) {
         pmw3360_cpi_set(CPI_DEFAULT - 1);
         pmw3360_reg_write(pmw3360_Motion_Burst, 0);
     }
+}
+
+void pointing_device_init_kb(void) {
+    pointing_device_driver_init();  // ←ここで呼ぶ🔥
 }
 
 uint16_t pointing_device_driver_get_cpi(void) {
@@ -132,12 +149,14 @@ void pointing_device_driver_set_cpi(uint16_t cpi) {
 }
 
 static void motion_to_mouse_move(ETE_motion_t *m, report_mouse_t *r, bool is_left) {
-    r->x = -clip2int8(m->x);
-    r->y = clip2int8(m->y);
+    r->x = clip2int8(m->x);
+    r->y = -clip2int8(m->y);
     // clear motion
     m->x = 0;
     m->y = 0;
 }
+
+
 
 static void motion_to_mouse_scroll(ETE_motion_t *m, report_mouse_t *r, bool is_left) {
     // consume motion of trackball.
@@ -184,22 +203,28 @@ static inline bool should_report(void) {
     }
     last = now;
 #endif
-#if defined(ETE_SCROLLBALL_INHIVITOR) && ETE_SCROLLBALL_INHIVITOR > 0
-    if (TIMER_DIFF_32(now, ETE.scroll_mode_changed) < ETE_SCROLLBALL_INHIVITOR) {
-        ETE.this_motion.x = 0;
-        ETE.this_motion.y = 0;
-        ETE.that_motion.x = 0;
-        ETE.that_motion.y = 0;
-    }
-#endif
-    return true;
+// #if defined(ETE_SCROLLBALL_INHIVITOR) && ETE_SCROLLBALL_INHIVITOR > 0
+//     if (TIMER_DIFF_32(now, ETE.scroll_mode_changed) < ETE_SCROLLBALL_INHIVITOR) {
+//         ETE.this_motion.x = 0;
+//         ETE.this_motion.y = 0;
+//         ETE.that_motion.x = 0;
+//         ETE.that_motion.y = 0;
+//     }
+// #endif
+return true;
 }
 
-report_mouse_t pointing_device_driver_get_report(report_mouse_t rep) {
+
+report_mouse_t ete_get_ball_report(report_mouse_t rep) {
     // fetch from optical sensor.
     if (ETE.this_have_ball) {
         pmw3360_motion_t d = {0};
-        if (pmw3360_motion_burst(&d)) {
+
+        bool ok = pmw3360_motion_burst(&d);
+
+        dprintf("motion ok=%d x=%d y=%d\n", ok, d.x, d.y);
+
+        if (ok) {
             ATOMIC_BLOCK_FORCEON {
                 ETE.this_motion.x = add16(ETE.this_motion.x, d.x);
                 ETE.this_motion.y = add16(ETE.this_motion.y, d.y);
@@ -207,13 +232,79 @@ report_mouse_t pointing_device_driver_get_report(report_mouse_t rep) {
         }
     }
     // report mouse event, if keyboard is primary.
-    if (is_keyboard_master() && should_report()) {
-        // modify mouse report by PMW3360 motion.
-        motion_to_mouse(&ETE.this_motion, &rep, is_keyboard_left(), ETE.scroll_mode);
-        motion_to_mouse(&ETE.that_motion, &rep, !is_keyboard_left(), ETE.scroll_mode ^ ETE.this_have_ball);
-        // store mouse report for OLED.
+    if (should_report())  {
+
+        bool scroll = ETE.scroll_mode;
+
+        // thisは常に「ボール側」として扱う
+        motion_to_mouse(&ETE.this_motion, &rep, true, scroll);
+
+        // thatは補助として扱う（PADとか）
+        motion_to_mouse(&ETE.that_motion, &rep, false, scroll);
+
         ETE.last_mouse = rep;
     }
+    dprintf("BALL\n");
+    return rep;
+}
+
+
+static bool pad_inited = false;
+
+report_mouse_t ete_get_pad_report(report_mouse_t rep) {
+
+    if (!pad_inited) {
+        azoteq_iqs5xx_init();
+        pad_inited = true;
+    }
+
+    rep = azoteq_iqs5xx_get_report(rep);
+    return rep;
+}
+
+report_mouse_t ete_pad_tune(report_mouse_t report)
+    {
+        static float smooth_x = 0;
+        static float smooth_y = 0;
+
+        float scale = 3.5f;
+        float alpha = 0.1f;
+
+        float fx = report.x * scale;
+        float fy = report.y * scale;
+
+        smooth_x = smooth_x * alpha + fx * (1.0f - alpha);
+        smooth_y = smooth_y * alpha + fy * (1.0f - alpha);
+
+        report.x = (int)smooth_x;
+        report.y = -(int)smooth_y;
+        
+        dprintf("PAD raw: x=%d y=%d\n", report.x, report.y);
+        return report;
+    }
+
+report_mouse_t pointing_device_driver_get_report(report_mouse_t rep) {
+
+    report_mouse_t pad  = {0};
+    report_mouse_t ball = {0};
+
+    // PAD（ここ修正🔥）
+    pad = ete_get_pad_report(pad);
+
+    // BALL
+    ball = ete_get_ball_report(ball);
+
+    // チューニング
+    pad  = ete_pad_tune(pad);
+    ball = ete_pointing_tune(ball);
+
+    // 合成
+    rep.x = pad.x + ball.x;
+    rep.y = pad.y + ball.y;
+    rep.h = pad.h + ball.h;
+    rep.v = pad.v + ball.v;
+    rep.buttons = pad.buttons | ball.buttons;
+
     return rep;
 }
 
@@ -274,88 +365,113 @@ void keyboard_post_init_kb(void) {
 
     ETE_on_adjust_layout(ETE_ADJUST_PENDING);
     keyboard_post_init_user();
+    dprintf("INIT CALLED\n");
 }
-
-
 
 
 bool process_record_kb(uint16_t keycode, keyrecord_t *record) {
-    // store last keycode, row, and col for OLED
-    ETE.last_kc  = keycode;
-    ETE.last_pos = record->event.key;
-
-    if (!process_record_user(keycode, record)) {
-        return false;
-    }
-
-    // strip QK_MODS part.
-    if (keycode >= QK_MODS && keycode <= QK_MODS_MAX) {
-        keycode &= 0xff;
-    }
-
-    switch (keycode) {
-#ifndef MOUSEKEY_ENABLE
-
-// process KC_MS_BTN1~8 by myself
-        // See process_action() in quantum/action.c for details.
-        case KC_MS_BTN1 ... KC_MS_BTN8: {
-            extern void register_mouse(uint8_t mouse_keycode, bool pressed);
-            register_mouse(keycode, record->event.pressed);
-            // to apply QK_MODS actions, allow to process others.
-            return true;
+    return process_record_user(keycode, record);
 }
 
-#endif
+// bool process_record_kb(uint16_t keycode, keyrecord_t *record) {
+//     // store last keycode, row, and col for OLED
+//     ETE.last_kc  = keycode;
+//     ETE.last_pos = record->event.key;
 
-        case SCRL_MO:
-            ETE_set_scroll_mode(record->event.pressed);
-            return false;
-    }
+//     if (!process_record_user(keycode, record)) {
+//         return false;
+//     }
 
-    // process events which works on pressed only.
-    if (record->event.pressed) {
-        switch (keycode) {
-            case REC_RST:
-                ETE_set_cpi(0);
-                ETE_set_scroll_div(0);
-                break;
-            case REC_SAVE: {
-                uint32_t raw = eeconfig_read_kb();
+//     // strip QK_MODS part.
+//     if (keycode >= QK_MODS && keycode <= QK_MODS_MAX) {
+//         keycode &= 0xff;
+//     }
 
-                raw = ete_conf_set_cpi(raw, ETE.cpi_value);
-                raw = ete_conf_set_sdiv(raw, ETE.scroll_div);
+//     switch (keycode) {
+// #ifndef MOUSEKEY_ENABLE
 
-                eeconfig_update_kb(raw);
-            } break;
+// // process KC_MS_BTN1~8 by myself
+//         // See process_action() in quantum/action.c for details.
+//         case KC_MS_BTN1 ... KC_MS_BTN8: {
+//             extern void register_mouse(uint8_t mouse_keycode, bool pressed);
+//             register_mouse(keycode, record->event.pressed);
+//             // to apply QK_MODS actions, allow to process others.
+//             return true;
+// }
 
-            case CPI_I100:
-                add_cpi(1);
-                break;
-            case CPI_D100:
-                add_cpi(-1);
-                break;
-            case CPI_I1K:
-                add_cpi(10);
-                break;
-            case CPI_D1K:
-                add_cpi(-10);
-                break;
+// #endif
 
-            case SCRL_TO:
-                ETE_set_scroll_mode(!ETE.scroll_mode);
-                break;
-            case SCRL_DVI:
-                add_scroll_div(1);
-                break;
-            case SCRL_DVD:
-                add_scroll_div(-1);
-                break;
+//         case SCRL_MO:
+//             ETE_set_scroll_mode(record->event.pressed);
+//             return false;
+//     }
 
-            default:
-                return true;
-        }
-        return false;
-    }
+//     // process events which works on pressed only.
+//     if (record->event.pressed) {
+//         switch (keycode) {
+//             case REC_RST:
+//                 ETE_set_cpi(0);
+//                 ETE_set_scroll_div(0);
+//                 break;
+//             case REC_SAVE: {
+//                 uint32_t raw = eeconfig_read_kb();
 
-    return true;
-}
+//                 raw = ete_conf_set_cpi(raw, ETE.cpi_value);
+//                 raw = ete_conf_set_sdiv(raw, ETE.scroll_div);
+
+//                 eeconfig_update_kb(raw);
+//             } break;
+
+//             case CPI_I100:
+//                 add_cpi(1);
+//                 break;
+//             case CPI_D100:
+//                 add_cpi(-1);
+//                 break;
+//             case CPI_I1K:
+//                 add_cpi(10);
+//                 break;
+//             case CPI_D1K:
+//                 add_cpi(-10);
+//                 break;
+
+//             case SCRL_TO:
+//                 ETE_set_scroll_mode(!ETE.scroll_mode);
+//                 break;
+//             case SCRL_DVI:
+//                 add_scroll_div(1);
+//                 break;
+//             case SCRL_DVD:
+//                 add_scroll_div(-1);
+//                 break;
+
+//             default:
+//                 return true;
+//         }
+//         return false;
+//     }
+
+//     return true;
+// }
+
+// bool ete_process_ball_key(uint16_t keycode, keyrecord_t *record) {
+
+//     if (!is_keyboard_master()) return true;
+
+//     switch (keycode) {
+
+//         case REC_RST:
+//         case REC_SAVE:
+//         case CPI_I100:
+//         case CPI_D100:
+//         case CPI_I1K:
+//         case CPI_D1K:
+//         case SCRL_TO:
+//         case SCRL_MO:
+//         case SCRL_DVI:
+//         case SCRL_DVD:
+//             return true;
+//     }
+
+//     return true;
+// }
