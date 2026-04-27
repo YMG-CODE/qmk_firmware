@@ -1357,28 +1357,48 @@ float speed = fabsf(input_x) + fabsf(input_y);
     // =========================
     // BALL
     // =========================
+
+    static float vx = 0, vy = 0;
+    static float rem_x = 0, rem_y = 0;
+
+    float fx = (float)r->x;
+    float fy = (float)r->y;
+
+    // スケールはfloatで
     if (!is_scroll) {
-        r->x = (int16_t)(r->x * cursor_scale);
-        r->y = (int16_t)(r->y * cursor_scale);
+        fx *= cursor_scale;
+        fy *= cursor_scale;
     }
 
+    // 慣性
     if (ete_get_inertia() > 0) {
-        static float vx = 0, vy = 0;
         float friction = 0.85f;
 
-        vx = vx * friction + r->x;
-        vy = vy * friction + r->y;
-
-        r->x = (int16_t)vx;
-        r->y = (int16_t)vy;
+        vx = vx * friction + fx;
+        vy = vy * friction + fy;
+    } else {
+        vx = fx;
+        vy = fy;
     }
 
+    // ★ サブピクセル蓄積
+    rem_x += vx;
+    rem_y += vy;
+
+    r->x = (int16_t)rem_x;
+    r->y = (int16_t)rem_y;
+
+    rem_x -= r->x;
+    rem_y -= r->y;
+
+    // スクロール化
     if (is_scroll) {
         uint8_t div = ete_get_scroll_speed();
         if (div < 1) div = 1;
 
         r->h = r->x / div;
         r->v = r->y / div;
+
         r->x = 0;
         r->y = 0;
     }
