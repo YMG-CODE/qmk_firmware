@@ -5,6 +5,10 @@
 #include "quantum.h"
 #include <stdio.h>
 
+// -----------------------------------------------------------------------------
+// Includes and core QMK definitions
+// -----------------------------------------------------------------------------
+
 enum ETE_keycodes {
     ETE_SAFE_RANGE = SAFE_RANGE,
     //----トラックボール用カスタムキーコード------
@@ -20,7 +24,8 @@ enum ETE_keycodes {
     SCRL_DVD, // Decrement scroll divider
 
     //----トラックパッド用カスタムキーコード------
-    LR_SWAP = SAFE_RANGE,//スクロール/カーソルモード切替
+    // These keycodes are handled in process_record_user()
+    LR_SWAP = SAFE_RANGE, // スクロール/カーソルモード切替
     SCRL_HOLD = SAFE_RANGE, //押している間スクロール
     SCRL_UP,//スクロール速度+
     SCRL_DN,//スクロール速度-
@@ -32,6 +37,9 @@ enum ETE_keycodes {
     INERTIA_TOGGLE,//慣性On/Off
 };
 
+// -----------------------------------------------------------------------------
+// Keycode aliases for trackball and touchpad functions
+// -----------------------------------------------------------------------------
 //----トラックボール用カスタムキーコード------
 #define REC_RST QK_KB_0
 #define REC_SAVE QK_KB_1
@@ -62,16 +70,21 @@ enum ETE_keycodes {
 #include "raw_hid.h"
 #include "ete_common.h"
 
+// -----------------------------------------------------------------------------
+// External function prototypes and hardware constants
+// -----------------------------------------------------------------------------
 // ==== RAW HID function prototypes ====
 void send_layer_usb(uint8_t layer);
 void send_keyevent_usb(uint16_t keycode, bool pressed, uint8_t layer);
-
 
 #define SLAVE_ADDR         0x0B
 #define CMD_REG_DISPLAY    0x01  // CPM表示コマンド
 #define CMD_REG_LAYER      0x02  // レイヤーインジケーターコマンド
 
 
+// -----------------------------------------------------------------------------
+// Keymap definitions
+// -----------------------------------------------------------------------------
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     [0] = LAYOUT(
    //,---------------------------------------------------------------------.     ,-----------------------------------------------------------------------.
@@ -124,6 +137,12 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 
 
 layer_state_t layer_state_set_user(layer_state_t state) {
+    // -----------------------------------------------------------------------------
+    // layer_state_set_user(): レイヤー変更時に呼ばれる
+    //   - 現在アクティブなレイヤーを取得
+    //   - 3層目では自動マウス機能を無効化
+    //   - ETE にレイヤー変更を通知して、外部表示などを更新
+    // -----------------------------------------------------------------------------
     uint8_t layer = get_highest_layer(state);
 
 #ifdef POINTING_DEVICE_AUTO_MOUSE_ENABLE
@@ -148,6 +167,11 @@ layer_state_t layer_state_set_user(layer_state_t state) {
 
 
 bool encoder_update_user(uint8_t index, bool clockwise) {
+    // -----------------------------------------------------------------------------
+    // encoder_update_user(): エンコーダー回転の処理
+    //   - index 0/1 で異なるキー位置を選択
+    //   - 現在レイヤー上のキーコードを取得してタップ送信
+    // -----------------------------------------------------------------------------
     keypos_t key;
     if(index == 0){
      if(clockwise){
@@ -199,16 +223,29 @@ const matrix_row_t matrix_mask[MATRIX_ROWS] = {
 
 
 void matrix_init_user(void) {
+    // -----------------------------------------------------------------------------
+    // matrix_init_user(): キーマトリクス初期化完了後に呼ばれる
+    //   - ETE 共通初期化を実行
+    // -----------------------------------------------------------------------------
     ete_init();
 }
 
 void matrix_scan_user(void) {
+    // -----------------------------------------------------------------------------
+    // matrix_scan_user(): メインループで定期的に呼ばれる
+    //   - ETE の tick 更新処理を呼び出す
+    // -----------------------------------------------------------------------------
     ete_tick();
 }
 
 
 
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
+    // -----------------------------------------------------------------------------
+    // process_record_user(): キー入力ごとに呼ばれる
+    //   - 全キーで ete_on_key() を先行処理
+    //   - カスタムキーコードを検出して独自処理を行う
+    // -----------------------------------------------------------------------------
     ete_on_key(keycode, record);   // ← これ必須
 
     switch (keycode) {
